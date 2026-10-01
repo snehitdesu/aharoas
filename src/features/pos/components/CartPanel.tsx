@@ -21,7 +21,7 @@ type Props = {
 
 function Row({ label, value, strong = false }: { label: string; value: string; strong?: boolean }) {
   return (
-    <div className={`flex justify-between ${strong ? "text-base font-semibold text-ink-900" : "text-sm text-ink-700"}`}>
+    <div className={`flex justify-between ${strong ? "rounded-md bg-vanilla-100 px-2 py-1.5 text-base font-semibold text-ink-900" : "text-sm text-ink-700"}`}>
       <span>{label}</span>
       <span className="tabular-nums">{value}</span>
     </div>
@@ -35,7 +35,7 @@ export function CartPanel({ state, dispatch, tables, running, onPickTable, onPic
 
   return (
     <section aria-label="Current order" className="flex min-h-0 flex-col bg-white">
-      <div className="space-y-2 border-b border-ink-300 p-3">
+      <div className="space-y-2 border-b border-ink-200 p-3">
         <div role="radiogroup" aria-label="Order type" className="grid grid-cols-3 gap-1 rounded-md bg-ink-100 p-1">
           {POS_ORDER_TYPES.map((t) => (
             <button
@@ -45,7 +45,7 @@ export function CartPanel({ state, dispatch, tables, running, onPickTable, onPic
               aria-checked={state.orderType === t.value}
               disabled={locked}
               onClick={() => dispatch({ type: "setOrderType", orderType: t.value })}
-              className={`h-9 rounded text-sm font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-500 disabled:cursor-not-allowed ${state.orderType === t.value ? "bg-white shadow-sm text-ink-900" : "text-ink-500"}`}
+              className={`h-9 rounded text-sm font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-500 disabled:cursor-not-allowed ${state.orderType === t.value ? "bg-white text-ink-900 shadow-xs" : "text-ink-500 hover:text-ink-800"}`}
             >
               {t.label}
             </button>
@@ -89,7 +89,7 @@ export function CartPanel({ state, dispatch, tables, running, onPickTable, onPic
 
       <div className="min-h-0 flex-1 overflow-y-auto">
         {running && running.items.length > 0 && (
-          <div className="border-b border-ink-300 bg-ink-100/60 px-3 py-2">
+          <div className="border-b border-ink-200 bg-ink-50 px-3 py-2">
             <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-ink-500">Already ordered</p>
             <ul className="space-y-1">
               {running.items.map((i) => (
@@ -153,7 +153,7 @@ export function CartPanel({ state, dispatch, tables, running, onPickTable, onPic
         )}
       </div>
 
-      <div className="space-y-1 border-t border-ink-300 p-3">
+      <div className="space-y-1 border-t border-ink-200 p-3">
         {running ? (
           <>
             <Row label="Subtotal" value={formatMoney(running.subtotal)} />

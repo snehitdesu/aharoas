@@ -9,6 +9,7 @@ import type { PrismaClient } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "@/server/db/client";
 import { type AccessContext, ValidationError, NotFoundError, assertOutletAccess } from "@/server/db/scope";
+import { assertOutletInOrg } from "@/server/db/outletGuard";
 import { assertCan } from "@/server/auth/rbac";
 import { writeAudit } from "@/server/audit/log";
 import { type Client, type Tx, runInTx } from "@/server/services/_workflow";
@@ -209,6 +210,7 @@ export async function createFeedback(ctx: AccessContext, input: z.input<typeof f
   assertOutletAccess(ctx, data.outletId);
   assertCan(ctx, "customer.manage", data.outletId);
   return runInTx(db, async (tx) => {
+    await assertOutletInOrg(tx, ctx, data.outletId);
     if (data.customerId) await loadCustomer(tx, ctx, data.customerId);
     if (data.orderId) {
       const order = await tx.order.findUnique({ where: { id: data.orderId } });

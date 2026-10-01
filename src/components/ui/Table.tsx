@@ -45,14 +45,14 @@ export function DataTable<T>({
   label: string;
   footer?: ReactNode;
 }) {
-  if (error) return <div className="rounded-lg border border-ink-300 bg-white"><ErrorState error={error} onRetry={onRetry} /></div>;
+  if (error) return <div className="rounded-xl border border-ink-200 bg-white shadow-card"><ErrorState error={error} onRetry={onRetry} /></div>;
   return (
-    <div className="relative overflow-x-auto rounded-lg border border-ink-300 bg-white">
+    <div className="relative overflow-x-auto rounded-xl border border-ink-200 bg-white shadow-card">
       <table className="w-full min-w-max border-collapse text-sm" aria-label={label} aria-busy={loading || undefined}>
         <thead>
-          <tr className="border-b border-ink-300 bg-ink-100/60 text-left text-xs font-semibold uppercase tracking-wide text-ink-500">
+          <tr className="sticky top-0 z-10 border-b border-ink-200 bg-ink-50 text-left text-[11px] font-semibold uppercase tracking-wider text-ink-500">
             {columns.map((c) => (
-              <th key={c.key} scope="col" className={`px-3 py-2 ${c.numeric ? "text-right" : ""} ${c.className ?? ""}`}>{c.header}</th>
+              <th key={c.key} scope="col" className={`px-3.5 py-2.5 ${c.numeric ? "text-right" : ""} ${c.className ?? ""}`}>{c.header}</th>
             ))}
           </tr>
         </thead>
@@ -63,15 +63,15 @@ export function DataTable<T>({
               onClick={onRowClick ? () => onRowClick(r) : undefined}
               onKeyDown={onRowClick ? (e) => e.key === "Enter" && e.target === e.currentTarget && onRowClick(r) : undefined}
               tabIndex={onRowClick ? 0 : undefined}
-              className={`border-b border-ink-100 last:border-0 ${onRowClick ? "cursor-pointer hover:bg-brand-50/50 focus-visible:bg-brand-50 focus-visible:outline-none" : ""}`}
+              className={`border-b border-ink-100 last:border-0 ${onRowClick ? "cursor-pointer transition-colors hover:bg-brand-50/60 focus-visible:bg-brand-50 focus-visible:outline-none" : ""}`}
             >
               {columns.map((c) => (
-                <td key={c.key} className={`px-3 py-2 align-top ${c.numeric ? "text-right tabular-nums" : ""} ${c.className ?? ""}`}>{c.cell(r)}</td>
+                <td key={c.key} className={`px-3.5 py-2.5 align-top ${c.numeric ? "text-right tabular-nums" : ""} ${c.className ?? ""}`}>{c.cell(r)}</td>
               ))}
             </tr>
           ))}
         </tbody>
-        {footer && <tfoot className="border-t border-ink-300 bg-ink-100/40 font-medium">{footer}</tfoot>}
+        {footer && <tfoot className="border-t border-ink-200 bg-ink-50 font-medium">{footer}</tfoot>}
       </table>
       {rows.length === 0 && (loading ? <div className="flex justify-center p-6"><Spinner /></div> : <EmptyState title={empty} hint={typeof emptyHint === "string" ? emptyHint : undefined} action={typeof emptyHint === "string" ? undefined : emptyHint} />)}
       {loading && rows.length > 0 && <div className="pointer-events-none absolute right-2 top-2"><Spinner label="Refreshing" /></div>}

@@ -35,6 +35,18 @@ type Booking = { id: string; tableId: string | null; partySize: number; reserved
 
 const UPCOMING = new Set(["BOOKED", "CONFIRMED", "SEATED"]);
 
+const FLOOR_TILE: Record<string, string> = {
+  AVAILABLE: "border-ok-200 bg-ok-50 text-ok-800",
+  OCCUPIED: "border-brand-200 bg-brand-50 text-brand-800",
+  ORDERING: "border-brand-200 bg-brand-50 text-brand-800",
+  PREPARING: "border-brand-200 bg-brand-50 text-brand-800",
+  READY: "border-ok-200 bg-ok-50 text-ok-800",
+  BILL_REQUESTED: "border-warn-200 bg-warn-50 text-warn-800",
+  BILLED: "border-warn-200 bg-warn-50 text-warn-800",
+  RESERVED: "border-vanilla-300 bg-vanilla-100 text-ink-800",
+  CLEANING: "border-ink-200 bg-ink-100 text-ink-500",
+};
+
 function FloorDialog({ floor, outletId, onClose, onDone }: { floor?: FloorRow; outletId: string; onClose: () => void; onDone: () => void }) {
   const [name, setName] = useState(floor?.name ?? "");
   const [sortOrder, setSortOrder] = useState(String(floor?.sortOrder ?? 0));
@@ -171,6 +183,40 @@ export function TablesScreen() {
         <SelectFilter label="Floor" value={floorFilter} onChange={setFloorFilter} options={[...floorOptions.map((f) => ({ value: f.id, label: f.name })), { value: "none", label: "No floor" }]} />
         <SelectFilter label="Status" value={status} onChange={setStatus} options={TableStatus.values} />
       </FilterBar>
+
+      {rows.length > 0 && (
+        <section aria-label="Floor plan" className="mb-4 space-y-4">
+          {(floorFilter ? floorOptions.filter((f) => f.id === floorFilter) : [...floorOptions, { id: "", name: "No floor" }]).map((floor) => {
+            const tiles = rows.filter((t) => (floor.id ? t.floorId === floor.id : !t.floorId));
+            if (!tiles.length && floorFilter !== "none") return null;
+            if (!tiles.length) return null;
+            return (
+              <div key={floor.id || "none"} className="rounded-xl border border-ink-200 bg-white p-4 shadow-card">
+                <h2 className="mb-3 text-sm font-semibold text-ink-900">{floor.name}</h2>
+                <ul className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-6">
+                  {tiles.map((t) => {
+                    const running = orderByTable.get(t.id) ?? [];
+                    return (
+                      <li key={t.id}>
+                        <button
+                          type="button"
+                          onClick={() => canStatus && setDialog({ kind: "status", table: t })}
+                          className={`flex min-h-[4.5rem] w-full flex-col items-start justify-between rounded-lg border px-2.5 py-2 text-left ${FLOOR_TILE[t.status] ?? "border-ink-200 bg-white"}`}
+                        >
+                          <span className="text-sm font-semibold">{t.code}</span>
+                          <span className="text-[11px] font-medium uppercase tracking-wide">{humanize(t.status)}</span>
+                          <span className="text-[11px] text-ink-600">{t.capacity} seats{running.length ? ` · ${running.length} order` : ""}</span>
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            );
+          })}
+        </section>
+      )}
+
       <DataTable label="Tables" rows={rows} rowKey={(t) => t.id} loading={tables.loading} error={tables.error} onRetry={tables.reload}
         empty={floorFilter || status ? "No tables match" : "No tables yet"}
         columns={[

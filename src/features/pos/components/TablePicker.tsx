@@ -4,11 +4,11 @@ import type { TableDTO } from "@/features/pos/types";
 import { Dialog } from "@/components/ui/Dialog";
 
 const STATUS_STYLE: Record<string, string> = {
-  AVAILABLE: "border-green-300 bg-ok-100 text-green-900",
-  RESERVED: "border-amber-300 bg-warn-100 text-amber-900",
-  CLEANING: "border-ink-300 bg-ink-100 text-ink-500",
+  AVAILABLE: "border-ok-200 bg-ok-50 text-ok-700",
+  RESERVED: "border-vanilla-300 bg-vanilla-100 text-ink-800",
+  CLEANING: "border-ink-200 bg-ink-100 text-ink-500",
 };
-const busy = "border-red-300 bg-bad-100 text-red-900";
+const busy = "border-brand-200 bg-brand-50 text-brand-800";
 
 /** Tables grouped by floor with live status; occupied tables open their running order. */
 export function TablePicker({ tables, selectedId, onSelect, onClose }: { tables: TableDTO[]; selectedId: string | null; onSelect: (t: TableDTO) => void; onClose: () => void }) {
@@ -35,7 +35,7 @@ export function TablePicker({ tables, selectedId, onSelect, onClose }: { tables:
                       disabled={t.status === "CLEANING"}
                       aria-pressed={selectedId === t.id}
                       aria-label={`Table ${t.code}, ${t.capacity} seats, ${t.status.toLowerCase().replace("_", " ")}`}
-                      className={`flex h-16 w-full flex-col items-center justify-center rounded-md border text-sm font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-500 disabled:cursor-not-allowed ${STATUS_STYLE[t.status] ?? busy} ${selectedId === t.id ? "ring-2 ring-brand-600" : ""}`}
+                      className={`flex h-16 w-full flex-col items-center justify-center rounded-lg border text-sm font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-500 disabled:cursor-not-allowed ${STATUS_STYLE[t.status] ?? busy} ${selectedId === t.id ? "ring-2 ring-brand-600 ring-offset-1" : ""}`}
                     >
                       {t.code}
                       <span className="text-[11px] font-normal">{t.capacity} seats · {t.status === "AVAILABLE" ? "free" : t.status.toLowerCase().replace("_", " ")}</span>

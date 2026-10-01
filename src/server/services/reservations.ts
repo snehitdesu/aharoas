@@ -31,6 +31,7 @@ import {
 } from "@/constants/enums";
 import { prisma } from "@/server/db/client";
 import { type AccessContext, assertOutletAccess, ValidationError, NotFoundError } from "@/server/db/scope";
+import { assertOutletInOrg } from "@/server/db/outletGuard";
 import { assertCan } from "@/server/auth/rbac";
 import { writeAudit } from "@/server/audit/log";
 import { type Client, type Tx, runInTx, assertTransition } from "@/server/services/_workflow";
@@ -127,6 +128,7 @@ export async function createReservation(ctx: AccessContext, input: z.input<typeo
   assertCan(ctx, "reservation.manage", data.outletId);
   if (data.reservedAt.getTime() < Date.now() - 60 * 60000) throw new ValidationError("Cannot book a reservation in the past");
   return runInTx(db, async (tx) => {
+    await assertOutletInOrg(tx, ctx, data.outletId);
     if (data.customerId) {
       const c = await tx.customer.findUnique({ where: { id: data.customerId }, select: { organizationId: true } });
       if (!c || c.organizationId !== ctx.organizationId) throw new NotFoundError("Customer not found");

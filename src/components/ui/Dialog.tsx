@@ -67,8 +67,8 @@ export function Dialog({
   const width = size === "sm" ? "max-w-sm" : size === "lg" ? "max-w-3xl" : "max-w-lg";
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink-900/40 p-4" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div ref={panel} role="dialog" aria-modal="true" aria-labelledby={titleId} aria-describedby={description ? descId : undefined} tabIndex={-1} className={`flex max-h-[90vh] w-full ${width} flex-col rounded-lg bg-white shadow-xl outline-none`}>
-        <div className="flex items-start justify-between gap-4 border-b border-ink-300 px-5 py-3">
+      <div ref={panel} role="dialog" aria-modal="true" aria-labelledby={titleId} aria-describedby={description ? descId : undefined} tabIndex={-1} className={`flex max-h-[90vh] w-full ${width} flex-col rounded-xl bg-white shadow-pop outline-none animate-scale-in`}>
+        <div className="flex items-start justify-between gap-4 border-b border-ink-200 px-5 py-3">
           <div>
             <h2 id={titleId} className="text-base font-semibold text-ink-900">{title}</h2>
             {description && <p id={descId} className="mt-0.5 text-sm text-ink-500">{description}</p>}
@@ -78,7 +78,7 @@ export function Dialog({
           </button>
         </div>
         <div className="overflow-y-auto px-5 py-4">{children}</div>
-        {footer && <div className="flex justify-end gap-2 border-t border-ink-300 px-5 py-3">{footer}</div>}
+        {footer && <div className="flex justify-end gap-2 border-t border-ink-200 px-5 py-3">{footer}</div>}
       </div>
     </div>
   );

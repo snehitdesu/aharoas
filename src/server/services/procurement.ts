@@ -23,6 +23,7 @@ import {
 } from "@/constants/enums";
 import { prisma } from "@/server/db/client";
 import { type AccessContext, assertOutletAccess, ValidationError, NotFoundError } from "@/server/db/scope";
+import { assertOutletInOrg } from "@/server/db/outletGuard";
 import { assertCan } from "@/server/auth/rbac";
 import { writeAudit } from "@/server/audit/log";
 import { recordPurchaseReceipt } from "@/server/services/inventory";
@@ -46,6 +47,7 @@ export function createIndent(ctx: AccessContext, input: z.input<typeof indentSch
   assertOutletAccess(ctx, data.outletId);
   assertCan(ctx, "purchase.create", data.outletId);
   return runInTx(db, async (tx) => {
+    await assertOutletInOrg(tx, ctx, data.outletId);
     const number = data.number ?? (await nextNumber(tx, tx.purchaseIndent, { outletId: data.outletId }, "IND"));
     const indent = await tx.purchaseIndent.create({
       data: {
@@ -103,6 +105,7 @@ export function createPurchaseOrder(ctx: AccessContext, input: z.input<typeof po
   assertOutletAccess(ctx, data.outletId);
   assertCan(ctx, "purchase.create", data.outletId);
   return runInTx(db, async (tx) => {
+    await assertOutletInOrg(tx, ctx, data.outletId);
     await ensureVendor(tx, ctx, data.vendorId);
     const number = data.number ?? (await nextNumber(tx, tx.purchaseOrder, { outletId: data.outletId }, "PO"));
     const totals = poTotals(data.lines.map((l) => ({ qty: l.qty, rate: l.rate, taxPct: l.taxPct ?? 0 })));
@@ -156,6 +159,7 @@ export function createGRN(ctx: AccessContext, input: z.input<typeof grnSchema>, 
   assertOutletAccess(ctx, data.outletId);
   assertCan(ctx, "grn.create", data.outletId);
   return runInTx(db, async (tx) => {
+    await assertOutletInOrg(tx, ctx, data.outletId);
     await ensureVendor(tx, ctx, data.vendorId);
     if (data.poId) {
       const po = await tx.purchaseOrder.findUnique({ where: { id: data.poId } });

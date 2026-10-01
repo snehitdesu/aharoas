@@ -228,7 +228,7 @@ export function PosScreen({ outletId, perms }: { outletId: string; perms: PosPer
     <div className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-[1fr_22rem] lg:grid-cols-[1fr_26rem]">
       <MenuPanel ref={searchRef} items={menu} onPick={pick} />
 
-      <div className="flex min-h-0 flex-col border-l border-ink-300">
+      <div className="flex min-h-0 flex-col border-l border-ink-200">
         <CartPanel
           state={cart}
           dispatch={dispatch}
@@ -238,7 +238,7 @@ export function PosScreen({ outletId, perms }: { outletId: string; perms: PosPer
           onPickCustomer={() => setDialog("customer")}
           canUseCustomers={perms.customerView}
         />
-        <div className="grid grid-cols-3 gap-2 border-t border-ink-300 bg-ink-100 p-2" role="toolbar" aria-label="Order actions">
+        <div className="grid grid-cols-3 gap-2 border-t border-ink-200 bg-ink-50 p-2" role="toolbar" aria-label="Order actions">
           <Button size="lg" onClick={() => setDialog("orders")}>Open orders</Button>
           <Button size="lg" onClick={() => (running ? (setRunning(null), dispatch({ type: "clear" })) : dispatch({ type: "clear" }))} disabled={!hasLines && !running}>
             {running ? "Close" : "Clear"}

@@ -2,12 +2,124 @@
 @tailwind components;
 @tailwind utilities;
 
+/**
+ * Aharos semantic design tokens (CSS custom properties).
+ * The numeric scales live in tailwind.config.ts; these names give the semantic
+ * layer referenced by base styles and bespoke components.
+ */
 :root {
   color-scheme: light;
+
+  /* Brand — Moonstone */
+  --color-brand: #4c9db0;
+  --color-brand-hover: #357d90;
+  --color-brand-active: #2b6475;
+  --color-brand-soft: #eff6f8;
+
+  /* Accent — Vanilla */
+  --color-accent: #ffebaf;
+  --color-accent-soft: #fff8e3;
+  --color-accent-strong: #e3a92b;
+
+  /* Neutrals */
+  --color-background: #f7f9fa;
+  --color-surface: #ffffff;
+  --color-surface-raised: #ffffff;
+  --color-surface-subtle: #eef1f3;
+  --color-border: #e2e7ea;
+  --color-border-strong: #9aa4ac;
+  --color-text-primary: #141a1f;
+  --color-text-secondary: #3c454c;
+  --color-text-muted: #6b7681;
+
+  /* Semantic */
+  --color-success: #15935e;
+  --color-warning: #b8730c;
+  --color-danger: #d1443e;
+  --color-info: #357d90;
+
+  --ring-brand: 0 0 0 3px rgb(76 157 176 / 0.35);
 }
 
 html,
 body {
   padding: 0;
   margin: 0;
+}
+
+body {
+  background-color: var(--color-background);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+/* Brand-tinted text selection. */
+::selection {
+  background-color: #cfeaf0;
+  color: #1a2024;
+}
+
+/* Consistent, visible focus ring for keyboard users across interactive elements. */
+:where(a, button, [role="button"], input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--color-brand);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Refined, unobtrusive scrollbars (operational screens scroll a lot). */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #cfd6db transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background-color: #cfd6db;
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background-color: #9aa4ac;
+}
+
+/* Tabular, scannable numbers everywhere numbers matter. */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Skeleton shimmer for loading placeholders. */
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  background-color: #eef1f3;
+}
+.skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.65), transparent);
+  animation: shimmer 1.4s infinite;
+}
+@keyframes shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  .skeleton::after {
+    animation: none;
+  }
 }

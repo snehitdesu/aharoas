@@ -18,6 +18,7 @@ import { z } from "zod";
 import { PaymentMethod, PettyCashType, ReconciliationStatus } from "@/constants/enums";
 import { prisma } from "@/server/db/client";
 import { type AccessContext, assertOutletAccess, ValidationError, NotFoundError } from "@/server/db/scope";
+import { assertOutletInOrg } from "@/server/db/outletGuard";
 import { assertCan } from "@/server/auth/rbac";
 import { writeAudit } from "@/server/audit/log";
 import { type Client, type Tx, runInTx } from "@/server/services/_workflow";
@@ -56,6 +57,7 @@ export async function createExpense(ctx: AccessContext, input: z.input<typeof ex
   assertOutletAccess(ctx, data.outletId);
   assertCan(ctx, "expense.manage", data.outletId);
   return runInTx(db, async (tx) => {
+    await assertOutletInOrg(tx, ctx, data.outletId);
     // Paying out of petty cash cannot overdraw the box.
     if (data.paidVia === "PETTY_CASH") {
       const bal = await pettyBalanceTx(tx, ctx, data.outletId);
@@ -132,6 +134,7 @@ export async function recordPettyCash(ctx: AccessContext, input: z.input<typeof 
   const outflow = data.type === "EXPENSE" || (data.type === "ADJUST" && data.direction === "OUT");
   const signed = outflow ? -data.amount : data.amount;
   return runInTx(db, async (tx) => {
+    await assertOutletInOrg(tx, ctx, data.outletId);
     if (data.type === "OPENING") {
       const any = await tx.pettyCashTxn.count({ where: { organizationId: ctx.organizationId, outletId: data.outletId } });
       if (any > 0) throw new ValidationError("Petty cash already has an opening balance; use ADD or ADJUST");
@@ -161,6 +164,7 @@ export async function openCashDrawer(ctx: AccessContext, input: { outletId: stri
   assertOutletAccess(ctx, data.outletId);
   assertCan(ctx, "payment.take", data.outletId);
   return runInTx(db, async (tx) => {
+    await assertOutletInOrg(tx, ctx, data.outletId);
     const existing = await tx.cashDrawerSession.findFirst({ where: { organizationId: ctx.organizationId, outletId: data.outletId, status: "OPEN" } });
     if (existing) throw new ValidationError("A cash drawer session is already open for this outlet");
     const session = await tx.cashDrawerSession.create({ data: { organizationId: ctx.organizationId, outletId: data.outletId, openedById: actor(ctx), openingFloat: money(data.openingFloat), status: "OPEN" } });

@@ -19,6 +19,7 @@ import { prisma } from "@/server/db/client";
 import { runInTx } from "@/server/services/_workflow";
 import { createHash } from "node:crypto";
 import { type AccessContext, assertOutletAccess, ValidationError, NotFoundError, ConflictError } from "@/server/db/scope";
+import { assertOutletInOrg } from "@/server/db/outletGuard";
 import { assertCan } from "@/server/auth/rbac";
 import { writeAudit } from "@/server/audit/log";
 import { D, dMul, dDiv, money } from "@/domain/money";
@@ -156,6 +157,7 @@ export async function createOrder(ctx: AccessContext, input: CreateOrderInput, d
 
 function createOrderTx(ctx: AccessContext, data: z.infer<typeof createOrderSchema>, hash: string | null, db: Client) {
   return runInTx(db, async (tx) => {
+    await assertOutletInOrg(tx, ctx, data.outletId); // outlet must belong to the caller's org (org-wide tenant guard)
     if (data.tableId) {
       const table = await tx.restaurantTable.findUnique({ where: { id: data.tableId } });
       if (!table || table.organizationId !== ctx.organizationId || table.outletId !== data.outletId) throw new ValidationError("Table not in this outlet");

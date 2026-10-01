@@ -135,9 +135,9 @@ export function StockScreen() {
         columns={[
           { key: "name", header: "Material", cell: (r) => <span className="font-medium text-ink-900">{r.name ?? `#${shortRef(r.materialId)}`}{!r.active && <Badge className="ml-2">Inactive</Badge>}</span> },
           { key: "sku", header: "SKU", cell: (r) => r.sku ?? "—" },
-          { key: "qty", header: "On hand", numeric: true, cell: (r) => <span className={r.quantity < 0 ? "text-bad-500" : ""}>{formatQty(r.quantity)} {r.unit ?? ""}</span> },
+          { key: "qty", header: "On hand", numeric: true, cell: (r) => <span className={`text-base font-semibold tabular-nums ${r.quantity < 0 ? "text-bad-600" : "text-ink-900"}`}>{formatQty(r.quantity)} <span className="text-xs font-medium text-ink-500">{r.unit ?? ""}</span></span> },
           { key: "reorder", header: "Reorder at", numeric: true, cell: (r) => (r.reorderLevel > 0 ? formatQty(r.reorderLevel) : "—") },
-          { key: "flag", header: "", cell: (r) => (r.quantity < 0 ? <Badge tone="bad">Negative</Badge> : lowIds.has(r.materialId) ? <Badge tone="warn">Low</Badge> : null) },
+          { key: "flag", header: "Status", cell: (r) => (r.quantity < 0 ? <Badge tone="bad">Negative</Badge> : lowIds.has(r.materialId) ? <Badge tone="warn">Low</Badge> : <Badge tone="ok">Healthy</Badge>) },
           { key: "avg", header: "Avg cost", numeric: true, cell: (r) => formatMoney(r.avgCost) },
           { key: "value", header: "Value", numeric: true, cell: (r) => formatMoney(r.value) },
         ]}

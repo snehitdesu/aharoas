@@ -38,14 +38,14 @@ export function LoginForm({ next }: { next?: string }) {
     <form onSubmit={submit} className="space-y-4" noValidate>
       <div>
         <label htmlFor="email" className="block text-sm font-medium text-ink-700">Email</label>
-        <input id="email" type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)} className="mt-1 h-10 w-full rounded-md border border-ink-300 px-3 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-500" />
+        <input id="email" type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)} className="mt-1 h-10 w-full rounded-md border border-ink-300 bg-white px-3 text-sm text-ink-900 placeholder:text-ink-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-500" />
       </div>
       <div>
         <label htmlFor="password" className="block text-sm font-medium text-ink-700">Password</label>
-        <input id="password" type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} className="mt-1 h-10 w-full rounded-md border border-ink-300 px-3 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-500" />
+        <input id="password" type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} className="mt-1 h-10 w-full rounded-md border border-ink-300 bg-white px-3 text-sm text-ink-900 placeholder:text-ink-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-500" />
       </div>
       {error && (
-        <p role="alert" className="rounded-md border border-red-200 bg-bad-100 px-3 py-2 text-sm text-red-900">
+        <p role="alert" className="rounded-md border border-bad-100 bg-bad-50 px-3 py-2 text-sm text-bad-700">
           {error}
         </p>
       )}

@@ -40,6 +40,9 @@ export default defineConfig({
     timeout: 240_000,
     stdout: "pipe",
     stderr: "pipe",
-    env: { DATABASE_URL: E2E_DB_URL, NODE_ENV: "production" },
+    // NODE_ENV=production exercises the real build; provide a non-placeholder
+    // AUTH_SECRET so production env validation (instrumentation) passes for the
+    // disposable e2e deployment.
+    env: { DATABASE_URL: E2E_DB_URL, NODE_ENV: "production", AUTH_SECRET: "e2e-test-auth-secret-not-a-real-production-value-0123456789" },
   },
 });

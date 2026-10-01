@@ -15,6 +15,31 @@ missing account-provisioning flow (M1), which is a product gap.
 "Controlled" means: one application instance, one organization (or a few trusted
 ones), HTTPS in front, PostgreSQL with backups, operators who can read logs.
 
+## Phase 5B — security & architecture hardening (2026-10-01)
+
+Small production-security gaps from the audit, now closed at the application layer
+(no database change; still SQLite in dev, still no RLS):
+
+- **Organization isolation on writes.** `assertOutletAccess` is a no-op for org-wide
+  / super-admin callers, so every write that accepts a client-supplied `outletId`
+  now also verifies the outlet exists and belongs to the caller's organization via
+  a shared `assertOutletInOrg` guard (orders, inventory ledger, procurement
+  indents/POs/GRNs, expenses, petty cash, cash drawer, feedback, reservations).
+  Modules that already did this check (menu, staff, master-data floors/tables,
+  business-day-backed finance) were left unchanged.
+- **Notification provider safety.** The mock notification provider (reports every
+  send as delivered) is now refused in production unless `ALLOW_MOCK_PROVIDERS=true`,
+  and an unknown provider name fails loudly — matching the payment/POS factories.
+  In-app notifications are unaffected (they never use a provider).
+- **Export download authorization.** Downloading/polling a stored export now
+  re-checks the report's own permission (e.g. `finance.view`) in addition to
+  ownership and `export.run`, so access revoked after creation blocks the download.
+- **Production environment validation.** A startup check (Next.js instrumentation)
+  fails fast when required production config is missing or unsafe: `DATABASE_URL`
+  present, `AUTH_SECRET` present / not the dev placeholder / ≥32 chars, rate limiting
+  not disabled, valid `SESSION_TTL_SECONDS`. It is a no-op outside production and
+  never prints secret values.
+
 ## MUST FIX before the first production deploy
 
 | # | Item | Why | Status |
@@ -38,10 +63,9 @@ ones), HTTPS in front, PostgreSQL with backups, operators who can read logs.
 | Row-Level Security (docs/postgres-rls.md) | Defense in depth. **Required before hosting a second, untrusted organization in the same database**; not required for a single-organization deployment where application-layer isolation (tested) applies. |
 | Shared rate-limit store (Redis) + object storage for exports | Prerequisite for >1 instance. |
 | Validation-before-authorization ordering | Services Zod-parse input before `assertCan`, so an unauthorized caller with a malformed body gets 422 (schema details) instead of 403. No data read or written. Low. |
-| Export re-authorization at download | Download checks owner/org-wide + `export.run`, not the report's own permission (a downgraded user can fetch an export made earlier). Low. |
 | Idle session timeout / session rotation | Sessions are 7-day absolute (`SESSION_TTL_SECONDS`), revoked on logout and deactivation; no idle timeout. |
 | Script/style CSP with nonces | Current CSP restricts framing, base, objects, form targets only. |
-| Structured logging + request ids, error monitoring (Sentry or similar), uptime alerts | Today: `console.error` for 5xx only. The mock notifier logs recipients (PII) to stdout. Prisma logs handled unique-constraint conflicts as errors (noise). |
+| Structured logging + request ids, error monitoring (Sentry or similar), uptime alerts | Today: `console.error` for 5xx only. The mock notifier logs recipients (PII) to stdout **in dev/test only** (it is refused in production unless explicitly opted in). Prisma logs handled unique-constraint conflicts as errors (noise). |
 | `npm audit` leftovers | `postcss` (Next's pinned build-time copy; needs attacker-controlled CSS at build time) and `deepmerge-ts` via the Prisma CLI (deploy-time). Not reachable at runtime; revisit on the next Next/Prisma upgrade. |
 | `next lint` → ESLint CLI | Deprecated in Next 16. |
 | Unit conversions are one-directional | Costing looks up `from → base` only; the seed defines `kg→g`, so a recipe line in grams for a kg material is rejected (with raw ids in the message). Add inverse lookup or define both directions. |
@@ -53,6 +77,6 @@ ones), HTTPS in front, PostgreSQL with backups, operators who can read logs.
 2. Resolve **M1** (provisioning) — otherwise no one can sign in.
 3. PostgreSQL 16 (managed or self-hosted) with backups/PITR (**M8**); create an owner role (migrations) and an app role (DML only, **M7**).
 4. Switch the provider to PostgreSQL and commit the baseline migration (**M3**); deploy with `prisma migrate deploy` as the owner role. **Never run `prisma/seed.ts`, `prisma migrate reset` or `db push --force-reset` against production** (the seed now refuses; the others do not).
-5. Environment: `NODE_ENV=production`, `DATABASE_URL` (app role), real webhook secrets and providers (**M9**), `TRUSTED_PROXY_HOPS` (**M5**), `EXPORT_DIR` on a persistent volume (**M10**), `SESSION_TTL_SECONDS` as desired. Leave `ALLOW_MOCK_PROVIDERS` and `ALLOW_DEMO_SEED` unset.
+5. Environment: `NODE_ENV=production`, `DATABASE_URL` (app role), a real `AUTH_SECRET` (≥32 chars, not the dev placeholder — startup validation refuses to boot otherwise), real webhook secrets and providers (**M9**), `TRUSTED_PROXY_HOPS` (**M5**), `EXPORT_DIR` on a persistent volume (**M10**), `SESSION_TTL_SECONDS` as desired. Leave `ALLOW_MOCK_PROVIDERS` and `ALLOW_DEMO_SEED` unset, and `RATE_LIMIT_DISABLED` unset/false. Startup fails fast if any required value is missing or unsafe.
 6. One instance (**M6**) behind HTTPS (**M4**); health check on `/api/health` (**M11**).
 7. Smoke test after deploy: sign in, open POS / KDS / dashboard, place and pay one order, check the audit log.

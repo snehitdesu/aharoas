@@ -1,6 +1,7 @@
 "use client";
 
 import { createContext, useCallback, useContext, useMemo, useRef, useState } from "react";
+import { Icon } from "@/components/ui/Icon";
 
 type Tone = "ok" | "bad" | "info";
 type Toast = { id: number; tone: Tone; message: string };
@@ -18,14 +19,24 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
     setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), tone === "bad" ? 7000 : 3500);
   }, []);
   const api = useMemo(() => ({ show }), [show]);
-  const tones: Record<Tone, string> = { ok: "border-green-300 bg-ok-100 text-green-900", bad: "border-red-300 bg-bad-100 text-red-900", info: "border-ink-300 bg-white text-ink-900" };
+  const tones: Record<Tone, string> = {
+    ok: "border-ok-100 bg-white text-ink-900 before:bg-ok-500",
+    bad: "border-bad-100 bg-white text-ink-900 before:bg-bad-500",
+    info: "border-brand-100 bg-white text-ink-900 before:bg-brand-500",
+  };
+  const icons: Record<Tone, "check" | "alert" | "bell"> = { ok: "check", bad: "alert", info: "bell" };
   return (
     <ToastContext.Provider value={api}>
       {children}
       <div aria-live="polite" aria-atomic="false" className="pointer-events-none fixed bottom-4 right-4 z-[60] flex w-80 flex-col gap-2">
         {toasts.map((t) => (
-          <div key={t.id} role={t.tone === "bad" ? "alert" : "status"} className={`pointer-events-auto rounded-md border px-3 py-2 text-sm shadow ${tones[t.tone]}`}>
-            {t.message}
+          <div
+            key={t.id}
+            role={t.tone === "bad" ? "alert" : "status"}
+            className={`pointer-events-auto relative flex animate-slide-up items-start gap-2.5 overflow-hidden rounded-lg border py-2.5 pl-4 pr-3 text-sm shadow-pop before:absolute before:inset-y-0 before:left-0 before:w-1 before:content-[''] ${tones[t.tone]}`}
+          >
+            <Icon name={icons[t.tone]} className={`mt-0.5 h-4 w-4 shrink-0 ${t.tone === "ok" ? "text-ok-600" : t.tone === "bad" ? "text-bad-600" : "text-brand-600"}`} />
+            <span className="leading-snug">{t.message}</span>
           </div>
         ))}
       </div>

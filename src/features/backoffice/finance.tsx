@@ -85,7 +85,7 @@ export function FinanceOverviewScreen() {
       </div>
       {closing.error ? <ErrorState error={closing.error} onRetry={closing.reload} /> : !c ? <LoadingState /> : (
         <>
-          <div className={`mb-3 rounded-md border px-3 py-2 text-sm ${c.readyToClose ? "border-green-200 bg-ok-100 text-green-900" : "border-amber-200 bg-warn-100 text-amber-900"}`} role="status">
+          <div className={`mb-3 rounded-md border px-3 py-2 text-sm ${c.readyToClose ? "border-ok-100 bg-ok-50 text-ok-700" : "border-warn-100 bg-warn-50 text-warn-700"}`} role="status">
             {c.readyToClose ? `${formatDate(c.businessDate)} is ready to close.` : <>Not ready to close: {c.blockers.join(" · ")}</>}
           </div>
           <div className="mb-3 grid grid-cols-2 gap-3 lg:grid-cols-4">

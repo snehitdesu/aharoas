@@ -166,7 +166,7 @@ export function PaymentDialog({ orderId, onClose, onSettled }: { orderId: string
             {plan.error ?? (method === "CASH" && plan.change > 0 ? `Change to return: ${formatMoney(plan.change)}` : plan.amount < due ? `Partial payment — ${formatMoney(due - plan.amount)} will remain` : " ")}
           </p>
           {phase.kind === "failed" && (
-            <p role="alert" className="rounded-md border border-red-200 bg-bad-100 px-3 py-2 text-sm text-red-900">
+            <p role="alert" className="rounded-md border border-bad-100 bg-bad-50 px-3 py-2 text-sm text-bad-700">
               {phase.message}
               {phase.retryVerifyId && " The payment was recorded as pending; retry confirmation — do not charge the guest again."}
             </p>

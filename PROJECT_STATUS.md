@@ -1,6 +1,6 @@
 # Aharos — Project Status
 
-_Last updated: 2026-10-01 — production verification & hardening: real-browser E2E (49 workflows) and the full suite executed on SQLite **and PostgreSQL 16**; Next.js security upgrade; auth / rate-limit / provider / seed hardening. Readiness checklist: `docs/production-readiness.md`._
+_Last updated: 2026-10-01 — Phase 5B security & architecture hardening (organization isolation on writes, notification provider production safety, export download re-authorization, production env validation) on top of Phase 5A account provisioning and the earlier production verification pass. Readiness checklist: `docs/production-readiness.md`._
 
 ## Stack
 Next.js 15.5.27 (App Router) · React 19.0.8 · TypeScript (strict) · Prisma 6 · SQLite (dev/test) / PostgreSQL 16 (target, **executed**) ·
@@ -14,9 +14,9 @@ Zod · bcryptjs · Vitest.
 | Seed (`prisma/seed.ts`) on a copy of dev.db | ✅ exit 0 |
 | `tsc --noEmit` | ✅ 0 errors |
 | `next lint` | ✅ clean |
-| `vitest run` (35 files, sequential — see TESTING.md) | ✅ **448/448** on SQLite · ✅ **448/448** on PostgreSQL 16.14 (non-UTC server) |
-| `next build` | ✅ 87 routes on Next.js 15.5.27 (built in an isolated workspace with its own `npm ci` of the committed lockfile, because a running `next dev` + Prisma Studio hold the local Prisma engine and `.next`) |
-| Playwright (real browser, production build) | ✅ **49/49** on SQLite · ✅ **49/49** on PostgreSQL |
+| `vitest run` (41 files, sequential — see TESTING.md) | ✅ **495/495** on SQLite (Phase 5B); PostgreSQL 16.14 last run at 448/448 (earlier pass — Phase 5A/5B tests added on SQLite, PG not re-run this phase) |
+| `next build` | ✅ succeeds on Next.js 15.5.27 (`prisma generate` ran without engine locks this phase) |
+| Playwright (real browser, production build) | ✅ **55/55** on SQLite (Phase 5B); 49/49 on PostgreSQL (earlier pass) |
 | PostgreSQL | ✅ baseline `migrate deploy` into an empty database, `migrate status` up to date, `migrate diff` no drift, seed exit 0 (docs/postgres.md) |
 | `npm audit --omit=dev` | ✅ no Next.js advisories (was **critical**, incl. RCE); remaining: `postcss` (Next's build-time copy), `deepmerge-ts` (Prisma CLI) — not runtime-reachable |
 
@@ -136,7 +136,22 @@ Back-office limitations: list date filters on DateTime columns use the browser's
 
 ## Production verification & hardening (2026-10-01)
 
-### Browser E2E (Playwright, production build, real API + DB) — 49 tests
+### Phase 5B — security & architecture hardening
+Application-layer fixes for the remaining audit gaps. No database change (SQLite
+in dev; no PostgreSQL RLS, no PostgreSQL cutover, no schema migration added).
+
+| Gap | Fix | Tests |
+|-----|-----|-------|
+| **Organization isolation on writes.** `assertOutletAccess` is a no-op for org-wide / super-admin callers, so a write taking a client `outletId` could target another org's outlet. | New shared `assertOutletInOrg(db, ctx, outletId)` guard (exists + belongs-to-org) applied at the write entry points that lacked it: orders (`createOrderTx`), inventory ledger (`appendLedger`, the single writer — covers receipts/issues/transfers/wastage/production/counts), procurement (indent/PO/GRN), finance (expense/petty cash/drawer open), CRM feedback, reservations. Modules already doing the check (menu, staff, master-data floors/tables, business-day-backed finance) were left unchanged. | `tests/domain/org-isolation.test.ts` |
+| **Notification provider could silently use the mock in production.** | `getNotificationProvider` now calls `assertMockAllowed` / `unknownProvider` like the payment factory: in production the mock is refused unless `ALLOW_MOCK_PROVIDERS=true`, and unknown names fail loudly. In-app notifications never use a provider. | `tests/integrations/notification-safety.test.ts` |
+| **Export download/status checked ownership + `export.run` but not the report's own permission.** | `loadJob` now re-checks `REPORTS[kind].permission` at the job's outlet, so access revoked after creation blocks the download. Create and run were already correct (`runReport` re-authorizes). | `tests/domain/export-security.test.ts` |
+| **No production config validation.** | `src/server/config/env.ts` + `src/instrumentation.ts`: at server start (production only) require `DATABASE_URL`, a non-placeholder `AUTH_SECRET` (≥32 chars), rate limiting enabled, valid `SESSION_TTL_SECONDS`. No-op in dev/test; never prints secret values. Playwright's `next start` gets a real `AUTH_SECRET` so e2e still boots. | `tests/config/env-validation.test.ts` |
+
+Verification this phase: focused suites green, full `vitest` **495/495** (41 files),
+`tsc --noEmit` clean, `next lint` clean, `next build` ✅, Playwright **55/55**.
+Password/auth lifecycle (Phase 5A) re-run with no regressions.
+
+### Browser E2E (Playwright, production build, real API + DB) — 49 tests (earlier pass; now 55 incl. Phase 5A password specs)
 The existing 31 (login, dashboard, POS, modifiers, payment, customers) all passed on first execution. Added 18 workflow tests:
 | Spec | Workflows |
 |------|-----------|
@@ -165,7 +180,7 @@ The existing 31 (login, dashboard, POS, modifiers, payment, customers) all passe
 ### Open findings (not fixed — see docs/production-readiness.md)
 - ~~Blocker — no account provisioning~~ — resolved in Phase 5A: `npm run bootstrap:owner` (first owner on an empty database), one-time setup/reset links (hashed, single-use, expiring; `PasswordToken` table), `/set-password`, `/forgot-password` (no account enumeration), `/account/password` (revokes other sessions). Remaining: no email/SMS delivery for self-service reset links (managers hand links over).
 - Services validate input before authorizing (unauthorized + malformed body → 422 with schema details instead of 403; no data exposure).
-- Export download does not re-check the report's own permission.
+- ~~Export download does not re-check the report's own permission.~~ — resolved in Phase 5B (download/status re-check the report permission + org/outlet, not just ownership).
 - Unit conversions are looked up in one direction only (the seed has kg→g, so gram recipe lines for kg materials are rejected, with raw ids in the message).
 - One login took 16.6 s under heavy host memory pressure (8 GB RAM, ~1.3 GB free); not reproducible in isolation (120–260 ms) or in later runs.
 

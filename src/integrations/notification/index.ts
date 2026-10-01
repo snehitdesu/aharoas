@@ -4,6 +4,8 @@
  * provider logs instead of sending. No external credentials are hardcoded —
  * real providers read them from env only.
  */
+import { assertMockAllowed, unknownProvider } from "@/integrations/policy";
+
 export type NotificationChannel = "IN_APP" | "EMAIL" | "WHATSAPP" | "PUSH";
 
 export type OutboundNotification = {
@@ -48,11 +50,16 @@ export class EmailNotificationProvider implements NotificationProvider {
 }
 
 export function getNotificationProvider(): NotificationProvider {
-  switch ((process.env.EMAIL_PROVIDER ?? process.env.WHATSAPP_PROVIDER ?? "mock").toLowerCase()) {
+  const name = (process.env.EMAIL_PROVIDER ?? process.env.WHATSAPP_PROVIDER ?? "mock").toLowerCase();
+  switch (name) {
     case "email":
       return new EmailNotificationProvider();
     case "mock":
-    default:
+      // The mock provider pretends every send succeeds; it must never ship
+      // notifications silently in production. Fail loudly unless explicitly opted in.
+      assertMockAllowed("notification");
       return new MockNotificationProvider();
+    default:
+      return unknownProvider("notification", name);
   }
 }

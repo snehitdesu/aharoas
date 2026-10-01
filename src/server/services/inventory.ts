@@ -22,6 +22,7 @@ import {
 import { prisma } from "@/server/db/client";
 import { runInTx } from "@/server/services/_workflow";
 import { type AccessContext, assertOutletAccess, ValidationError } from "@/server/db/scope";
+import { assertOutletInOrg } from "@/server/db/outletGuard";
 import { assertCan, type Permission } from "@/server/auth/rbac";
 import { writeAudit } from "@/server/audit/log";
 import { D, dMul, qty as roundQty, money } from "@/domain/money";
@@ -70,6 +71,7 @@ function signedQty(txnType: TxnType, magnitude: Prisma.Decimal, direction?: "IN"
  * inflows that carry a rate.
  */
 export async function appendLedger(tx: Tx, ctx: AccessContext, input: LedgerEntryInput) {
+  await assertOutletInOrg(tx, ctx, input.outletId); // every ledger row's outlet must belong to the caller's org
   const magnitude = D(input.magnitude);
   if (magnitude.lte(0)) throw new ValidationError("Quantity must be greater than zero");
 

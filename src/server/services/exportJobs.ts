@@ -140,6 +140,12 @@ async function loadJob(db: PrismaClient, ctx: AccessContext, jobId: string) {
   const isOwner = job.requestedById === ctx.userId;
   if (!isOwner && !ctx.isOrgWide && !ctx.isSuperAdmin) throw new ForbiddenError("Not your export");
   assertCan(ctx, "export.run", job.outletId ?? undefined);
+  // Ownership is NOT sufficient for restricted reports: the caller must STILL
+  // hold the report's own permission at the requested outlet (e.g. finance.view),
+  // re-checked now so access revoked after creation blocks status + download.
+  const def = REPORTS[job.kind];
+  if (!def) throw new NotFoundError("Export job not found"); // unknown report kind: cannot verify authorization
+  assertCan(ctx, def.permission, job.outletId ?? undefined);
   return job;
 }
 

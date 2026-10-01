@@ -20,14 +20,28 @@ import { Button } from "@/components/ui/Button";
 import { Icon } from "@/components/ui/Icon";
 import { Field, FormDialog, Input, Select, Textarea, opt } from "@/components/ui/Form";
 import { DataTable, Pager, type Column } from "@/components/ui/Table";
-import { Card, Details, PageHeader, StatusBadge, Stat } from "@/components/ui/Page";
+import { Card, Details, PageHeader, StatusBadge, Stat, SubNav } from "@/components/ui/Page";
 import { LoadingState, ErrorState } from "@/components/ui/States";
 import { FilterBar, SelectFilter } from "@/components/ui/Filters";
 import { DocumentList, TransitionBar, cancelConfirm, type Doc } from "@/features/backoffice/documents";
 import { LineEditor, emptyLine, toApiLines, type LineDraft, type LineField } from "@/features/backoffice/LineEditor";
 import { VendorSelect, materialLabel, unitOf, useDepartments, useMaterials, useVendors, vendorLabel } from "@/features/backoffice/lookups";
 
-// ---------------- types ----------------
+function ProcureNav() {
+  const { can } = useShell();
+  return (
+    <SubNav
+      label="Procurement"
+      items={[
+        { href: "/procurement/indents", label: "Indents", hidden: !can("purchase.view") },
+        { href: "/procurement/purchase-orders", label: "Purchase orders", hidden: !can("purchase.view") },
+        { href: "/procurement/grns", label: "Goods receipts", hidden: !can("purchase.view") },
+        { href: "/procurement/bills", label: "Bills", hidden: !can("purchase.view") },
+        { href: "/procurement/payments", label: "Payments", hidden: !can("finance.view") },
+      ]}
+    />
+  );
+}
 
 type IndentLine = { id: string; materialId: string; qty: string; unitId: string | null };
 type Indent = Doc & { departmentId: string | null; notes: string | null; outletId: string; lines?: IndentLine[]; _count?: { lines: number } };
@@ -89,6 +103,7 @@ export function IndentsScreen() {
   return (
     <>
       <PageHeader title="Purchase indents" subtitle="Internal purchase requests for this outlet" actions={can("purchase.create") && <Button variant="primary" onClick={() => setOpen(true)}><Icon name="plus" /> New indent</Button>} />
+      <ProcureNav />
       <DocumentList<Indent> label="Indents" endpoint="/api/procurement/indents" statuses={IndentStatus.values} reloadKey={rk} detailHref={(r) => `/procurement/indents/${r.id}`}
         columns={[numberCol(), statusCol(), { key: "lines", header: "Lines", numeric: true, cell: (r) => r._count?.lines ?? "—" }, createdCol(outlet?.timezone)]} />
       <CreateIndentDialog open={open} onClose={() => setOpen(false)} onDone={() => setRk((k) => k + 1)} />
@@ -175,6 +190,7 @@ export function PurchaseOrdersScreen() {
   return (
     <>
       <PageHeader title="Purchase orders" subtitle="Orders placed with vendors" actions={can("purchase.create") && <Button variant="primary" onClick={() => setOpen(true)}><Icon name="plus" /> New PO</Button>} />
+      <ProcureNav />
       <DocumentList<PO> label="Purchase orders" endpoint="/api/procurement/purchase-orders" statuses={PurchaseOrderStatus.values} vendorFilter reloadKey={rk} detailHref={(r) => `/procurement/purchase-orders/${r.id}`}
         columns={[
           numberCol(), statusCol(),
@@ -292,6 +308,7 @@ export function GRNsScreen() {
   return (
     <>
       <PageHeader title="Goods receipts" subtitle="Posting a GRN writes PURCHASE_RECEIPT rows to the inventory ledger" actions={can("grn.create") && <Button variant="primary" onClick={() => setOpen(true)}><Icon name="plus" /> New GRN</Button>} />
+      <ProcureNav />
       <DocumentList<GRN> label="Goods receipts" endpoint="/api/procurement/grns" statuses={GRNStatus.values} vendorFilter detailHref={(r) => `/procurement/grns/${r.id}`}
         columns={[numberCol(), statusCol(), { key: "vendor", header: "Vendor", cell: (r) => vendorLabel(vendors.byId, r.vendorId) }, { key: "po", header: "PO", cell: (r) => (r.poId ? `#${shortRef(r.poId)}` : "—") }, { key: "lines", header: "Lines", numeric: true, cell: (r) => r._count?.lines ?? "—" }, createdCol(outlet?.timezone)]} />
       <CreateGRNDialog open={open} onClose={() => setOpen(false)} onDone={(id) => router.push(`/procurement/grns/${id}`)} />
@@ -381,6 +398,7 @@ export function BillsScreen() {
   return (
     <>
       <PageHeader title="Purchase bills" subtitle="Vendor invoices; payments reduce the outstanding balance" actions={can("bill.manage") && <Button variant="primary" onClick={() => setOpen(true)}><Icon name="plus" /> New bill</Button>} />
+      <ProcureNav />
       <DocumentList<Bill> label="Purchase bills" endpoint="/api/procurement/bills" statuses={PurchaseBillStatus.values} vendorFilter detailHref={(r) => `/procurement/bills/${r.id}`}
         columns={[
           numberCol(), statusCol(),
@@ -502,6 +520,7 @@ export function VendorPaymentsScreen() {
   return (
     <>
       <PageHeader title="Vendor payments" subtitle="Payments made and what is still owed" actions={can("vendor.pay") && <Button variant="primary" onClick={() => setOpen(true)}><Icon name="plus" /> Record payment</Button>} />
+      <ProcureNav />
       <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Stat label="Outstanding" value={dues.data ? formatMoney(totalDue) : "…"} hint="Open + partially paid bills" />
         <Stat label="Overdue" value={dues.data ? formatMoney(totalOverdue) : "…"} tone={totalOverdue > 0 ? "bad" : undefined} />
