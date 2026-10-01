@@ -1,0 +1,7 @@
+{
+  "extends": "next/core-web-vitals",
+  "ignorePatterns": ["node_modules/", ".next/", "prisma/migrations/"],
+  "rules": {
+    "@next/next/no-html-link-for-pages": "off"
+  }
+}

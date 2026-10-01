@@ -1,0 +1,1612 @@
+// ============================================================
+// Aharos — Restaurant Operating System
+// Prisma schema
+//
+// DATABASE STRATEGY
+// - Local dev: SQLite (zero external services). See note below.
+// - Production: PostgreSQL (+ Row Level Security). Switch `provider`
+//   to "postgresql" and point DATABASE_URL at Postgres. The schema is
+//   written to be portable (see DATABASE.md).
+//
+// TENANCY ANCHORS (RLS-ready)
+// - Every business row carries scalar `organizationId` (and `outletId`
+//   where operational). These are the columns Postgres RLS policies
+//   filter on, so they are denormalized onto every row on purpose and
+//   indexed. Enforcement today lives in the data-access layer
+//   (src/server/db/scope.ts); in production the same columns back RLS.
+//
+// ACTORS
+// - `createdById` / actor columns reference User.id as indexed scalars
+//   (traceability without a fragile mega back-relation on User). Auth-
+//   critical relations (Session, Membership) are formal FKs.
+//
+// IMMUTABILITY
+// - InventoryLedger, AuditLog, LoyaltyTransaction, PettyCashTxn and
+//   Payment are append-only. Mistakes are fixed with CORRECTION rows
+//   (self-relations correctionOfId / reversedById), never edits/deletes.
+// ============================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  // Local: sqlite. Production: change to "postgresql".
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================
+// TENANCY & IDENTITY
+// ============================================================
+
+model Organization {
+  id        String   @id @default(cuid())
+  name      String
+  legalName String?
+  gstin     String?
+  currency  String   @default("INR")
+  timezone  String   @default("Asia/Kolkata")
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  outlets     Outlet[]
+  memberships Membership[]
+  users       User[]
+
+  @@index([active])
+}
+
+model Outlet {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  code           String
+  name           String
+  address        String?
+  gstin          String?
+  phone          String?
+  currency       String       @default("INR")
+  timezone       String       @default("Asia/Kolkata")
+  openTime       String? // "09:00"
+  closeTime      String? // "23:30"
+  active         Boolean      @default(true)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  departments Department[]
+  floors      Floor[]
+  memberships Membership[]
+
+  @@unique([organizationId, code])
+  @@index([organizationId, active])
+}
+
+model Department {
+  id             String   @id @default(cuid())
+  organizationId String
+  outletId       String
+  outlet         Outlet   @relation(fields: [outletId], references: [id], onDelete: Cascade)
+  name           String
+  kind           String   @default("OTHER") // STORE | KITCHEN | BAR | BAKERY | PRODUCTION | OTHER
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([outletId, name])
+  @@index([organizationId])
+  @@index([outletId, kind])
+}
+
+model User {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  email          String
+  name           String
+  passwordHash   String
+  phone          String?
+  active         Boolean      @default(true)
+  isSuperAdmin   Boolean      @default(false)
+  lastLoginAt    DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  memberships Membership[]
+  sessions    Session[]
+
+  @@unique([email])
+  @@index([organizationId, active])
+}
+
+// A user's role at a specific outlet (outletId null => organization-wide role).
+model Membership {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  userId         String
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  outletId       String?
+  outlet         Outlet?      @relation(fields: [outletId], references: [id], onDelete: Cascade)
+  // OWNER | AREA_MANAGER | ADMIN | MANAGER | STORE | KITCHEN | CAPTAIN | CASHIER | CUSTOMER | SUPER_ADMIN
+  role           String
+  active         Boolean      @default(true)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@unique([userId, outletId, role])
+  @@index([organizationId])
+  @@index([outletId])
+  @@index([userId, active])
+}
+
+model Session {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique
+  ip        String?
+  userAgent String?
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+// ============================================================
+// MASTER DATA
+// ============================================================
+
+model Unit {
+  id             String   @id @default(cuid())
+  organizationId String
+  code           String // "kg", "g", "L", "ml", "pc"
+  name           String
+  kind           String   @default("COUNT") // WEIGHT | VOLUME | COUNT
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  materials     Material[]        @relation("MaterialBaseUnit")
+  ledgerEntries InventoryLedger[]
+
+  @@unique([organizationId, code])
+  @@index([organizationId])
+}
+
+// Unit conversions. materialId null => global conversion (e.g. 1 kg = 1000 g).
+model UnitConversion {
+  id             String   @id @default(cuid())
+  organizationId String
+  fromUnitId     String
+  toUnitId       String
+  factor         Decimal // 1 fromUnit = factor * toUnit
+  materialId     String? // material-specific override (e.g. 1 crate = 24 pc)
+  createdAt      DateTime @default(now())
+
+  @@unique([organizationId, fromUnitId, toUnitId, materialId])
+  @@index([organizationId])
+  @@index([materialId])
+}
+
+model MaterialCategory {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  parentId       String?
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  materials Material[]
+
+  @@unique([organizationId, name])
+  @@index([organizationId])
+}
+
+model Material {
+  id                String            @id @default(cuid())
+  organizationId    String
+  sku               String
+  name              String
+  categoryId        String?
+  category          MaterialCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  baseUnitId        String
+  baseUnit          Unit              @relation("MaterialBaseUnit", fields: [baseUnitId], references: [id], onDelete: Restrict)
+  purchaseUnitId    String?
+  taxPct            Decimal           @default(0)
+  minStock          Decimal           @default(0)
+  reorderLevel      Decimal           @default(0)
+  preferredVendorId String?
+  perishable        Boolean           @default(false)
+  trackBatch        Boolean           @default(false)
+  active            Boolean           @default(true)
+  createdById       String?
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+
+  ledgerEntries InventoryLedger[]
+  vendorLinks   VendorMaterial[]
+  outletCosts   OutletMaterialCost[]
+  recipeLines   RecipeLine[]         @relation("RecipeLineMaterial")
+
+  @@unique([organizationId, sku])
+  @@index([organizationId, active])
+  @@index([categoryId])
+}
+
+// Weighted-average cost is per outlet (purchases differ by outlet).
+model OutletMaterialCost {
+  id             String   @id @default(cuid())
+  organizationId String
+  outletId       String
+  materialId     String
+  material       Material @relation(fields: [materialId], references: [id], onDelete: Cascade)
+  avgCost        Decimal  @default(0) // weighted-average unit cost in base unit
+  lastCost       Decimal  @default(0)
+  updatedAt      DateTime @updatedAt
+
+  @@unique([outletId, materialId])
+  @@index([organizationId])
+  @@index([materialId])
+}
+
+// ============================================================
+// VENDORS
+// ============================================================
+
+model Vendor {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  companyName    String?
+  phone          String?
+  email          String?
+  address        String?
+  gstin          String?
+  bankAccount    String?
+  bankIfsc       String?
+  paymentTerms   String? // "NET15", "COD"
+  creditLimit    Decimal  @default(0)
+  active         Boolean  @default(true)
+  notes          String?
+  createdById    String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  materials VendorMaterial[]
+
+  @@unique([organizationId, name])
+  @@index([organizationId, active])
+}
+
+model VendorMaterial {
+  id             String   @id @default(cuid())
+  organizationId String
+  vendorId       String
+  vendor         Vendor   @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  materialId     String
+  material       Material @relation(fields: [materialId], references: [id], onDelete: Cascade)
+  lastRate       Decimal  @default(0)
+  leadTimeDays   Int      @default(1)
+  preferred      Boolean  @default(false)
+  createdAt      DateTime @default(now())
+
+  @@unique([vendorId, materialId])
+  @@index([organizationId])
+  @@index([materialId])
+}
+
+// ============================================================
+// MENU
+// ============================================================
+
+model MenuCategory {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  sortOrder      Int      @default(0)
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  items MenuItem[]
+
+  @@unique([organizationId, name])
+  @@index([organizationId])
+}
+
+model MenuItem {
+  id             String        @id @default(cuid())
+  organizationId String
+  categoryId     String?
+  category       MenuCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  name           String
+  description    String?
+  price          Decimal       @default(0)
+  taxPct         Decimal       @default(5)
+  station        String        @default("KITCHEN") // routing hint for KOT: KITCHEN | BAR | BAKERY
+  posCode        String? // external POS item code for mapping
+  isVeg          Boolean       @default(true)
+  active         Boolean       @default(true)
+  soldOut        Boolean       @default(false)
+  createdById    String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  variants        MenuItemVariant[]
+  modifierGroups  MenuItemModifierGroup[]
+  recipe          Recipe?                 @relation("MenuItemRecipe")
+  orderItems      OrderItem[]
+  outletOverrides OutletMenuItem[]
+
+  @@unique([organizationId, name])
+  @@index([organizationId, active])
+  @@index([organizationId, posCode])
+  @@index([categoryId])
+}
+
+// Per-outlet menu overrides. Absent row => the org-level MenuItem values apply.
+model OutletMenuItem {
+  id             String   @id @default(cuid())
+  organizationId String
+  outletId       String
+  menuItemId     String
+  menuItem       MenuItem @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+  price          Decimal? // null => MenuItem.price
+  active         Boolean  @default(true) // false => not offered at this outlet
+  soldOut        Boolean  @default(false)
+  updatedAt      DateTime @updatedAt
+
+  @@unique([outletId, menuItemId])
+  @@index([organizationId])
+  @@index([menuItemId])
+}
+
+model MenuItemVariant {
+  id             String   @id @default(cuid())
+  organizationId String
+  menuItemId     String
+  menuItem       MenuItem @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+  name           String // "Half", "Full"
+  priceDelta     Decimal  @default(0)
+  active         Boolean  @default(true)
+
+  @@unique([menuItemId, name])
+  @@index([organizationId])
+}
+
+model ModifierGroup {
+  id             String  @id @default(cuid())
+  organizationId String
+  name           String // "Spice Level", "Add-ons"
+  minSelect      Int     @default(0)
+  maxSelect      Int     @default(1)
+  active         Boolean @default(true)
+
+  options   ModifierOption[]
+  menuItems MenuItemModifierGroup[]
+
+  @@unique([organizationId, name])
+  @@index([organizationId])
+}
+
+model ModifierOption {
+  id             String        @id @default(cuid())
+  organizationId String
+  groupId        String
+  group          ModifierGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  name           String
+  priceDelta     Decimal       @default(0)
+  active         Boolean       @default(true)
+
+  @@unique([groupId, name])
+  @@index([organizationId])
+}
+
+model MenuItemModifierGroup {
+  id         String        @id @default(cuid())
+  menuItemId String
+  menuItem   MenuItem      @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+  groupId    String
+  group      ModifierGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  @@unique([menuItemId, groupId])
+  @@index([groupId])
+}
+
+// ============================================================
+// RECIPES (recursive, versioned)
+// ============================================================
+
+model Recipe {
+  id               String    @id @default(cuid())
+  organizationId   String
+  // A recipe produces either a menu item or a stockable sub-recipe material.
+  outputType       String    @default("MENU_ITEM") // MENU_ITEM | SUB_RECIPE
+  menuItemId       String?   @unique
+  menuItem         MenuItem? @relation("MenuItemRecipe", fields: [menuItemId], references: [id], onDelete: Cascade)
+  outputMaterialId String? // for SUB_RECIPE: the produced (semi-finished) material
+  name             String
+  active           Boolean   @default(true)
+  createdById      String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  versions    RecipeVersion[]
+  // Lines in OTHER recipes that reference this recipe as a sub-recipe.
+  usedInLines RecipeLine[]    @relation("RecipeLineSubRecipe")
+
+  @@index([organizationId, active])
+  @@index([outputMaterialId])
+}
+
+model RecipeVersion {
+  id             String    @id @default(cuid())
+  organizationId String
+  recipeId       String
+  recipe         Recipe    @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+  version        Int       @default(1)
+  status         String    @default("DRAFT") // DRAFT | APPROVED | ARCHIVED
+  effectiveFrom  DateTime  @default(now())
+  yieldQty       Decimal   @default(1)
+  yieldUnitId    String?
+  servingSize    Decimal   @default(1)
+  notes          String?
+  approvedById   String?
+  approvedAt     DateTime?
+  createdById    String?
+  createdAt      DateTime  @default(now())
+
+  lines RecipeLine[]
+
+  @@unique([recipeId, version])
+  @@index([organizationId])
+  @@index([recipeId, status])
+}
+
+model RecipeLine {
+  id              String        @id @default(cuid())
+  organizationId  String
+  recipeVersionId String
+  recipeVersion   RecipeVersion @relation(fields: [recipeVersionId], references: [id], onDelete: Cascade)
+  componentType   String // MATERIAL | SUB_RECIPE
+  materialId      String?
+  material        Material?     @relation("RecipeLineMaterial", fields: [materialId], references: [id], onDelete: Restrict)
+  subRecipeId     String?
+  subRecipe       Recipe?       @relation("RecipeLineSubRecipe", fields: [subRecipeId], references: [id], onDelete: Restrict)
+  qty             Decimal
+  unitId          String?
+  wastagePct      Decimal       @default(0)
+  sortOrder       Int           @default(0)
+
+  @@index([recipeVersionId])
+  @@index([organizationId])
+  @@index([materialId])
+  @@index([subRecipeId])
+}
+
+// ============================================================
+// TABLES & FLOORS
+// ============================================================
+
+model Floor {
+  id             String   @id @default(cuid())
+  organizationId String
+  outletId       String
+  outlet         Outlet   @relation(fields: [outletId], references: [id], onDelete: Cascade)
+  name           String
+  sortOrder      Int      @default(0)
+  createdAt      DateTime @default(now())
+
+  tables RestaurantTable[]
+
+  @@unique([outletId, name])
+  @@index([organizationId])
+}
+
+model RestaurantTable {
+  id             String   @id @default(cuid())
+  organizationId String
+  outletId       String
+  floorId        String?
+  floor          Floor?   @relation(fields: [floorId], references: [id], onDelete: SetNull)
+  code           String // "T1"
+  capacity       Int      @default(4)
+  status         String   @default("AVAILABLE") // AVAILABLE | OCCUPIED | ORDERING | PREPARING | READY | BILL_REQUESTED | BILLED | RESERVED | CLEANING
+  qrToken        String?  @unique
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  orders Order[]
+
+  @@unique([outletId, code])
+  @@index([organizationId, outletId])
+  @@index([outletId, status])
+}
+
+// ============================================================
+// CUSTOMERS / CRM / LOYALTY
+// ============================================================
+
+model Customer {
+  id             String    @id @default(cuid())
+  organizationId String
+  name           String
+  phone          String?
+  email          String?
+  birthday       DateTime?
+  notes          String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  addresses    CustomerAddress[]
+  loyalty      LoyaltyAccount?
+  loyaltyTxns  LoyaltyTransaction[]
+  orders       Order[]
+  reservations Reservation[]
+  feedback     Feedback[]
+
+  @@unique([organizationId, phone])
+  @@index([organizationId])
+}
+
+model CustomerAddress {
+  id             String   @id @default(cuid())
+  organizationId String
+  customerId     String
+  customer       Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  label          String   @default("Home")
+  line1          String
+  line2          String?
+  city           String?
+  pincode        String?
+  lat            Float?
+  lng            Float?
+
+  @@index([customerId])
+}
+
+model LoyaltyAccount {
+  id             String   @id @default(cuid())
+  organizationId String
+  customerId     String   @unique
+  customer       Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  tier           String   @default("SILVER")
+  // Balance is a cache; the ledger (LoyaltyTransaction) is the source of truth.
+  pointsBalance  Int      @default(0)
+  updatedAt      DateTime @updatedAt
+
+  @@index([organizationId])
+}
+
+// Append-only loyalty ledger. Never edit a balance directly.
+model LoyaltyTransaction {
+  id             String   @id @default(cuid())
+  organizationId String
+  customerId     String
+  customer       Customer @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  type           String // EARN | REDEEM | EXPIRE | ADJUST
+  points         Int // signed: + earn, - redeem/expire
+  orderId        String?
+  note           String?
+  actorId        String?
+  createdAt      DateTime @default(now())
+
+  // Idempotency: at most one EARN (or REDEEM / reversal ADJUST) per customer per
+  // order. NULL orderIds (manual adjustments) are distinct, so they are unaffected.
+  @@unique([customerId, orderId, type])
+  @@index([organizationId])
+  @@index([customerId])
+}
+
+model Feedback {
+  id             String    @id @default(cuid())
+  organizationId String
+  outletId       String?
+  customerId     String?
+  customer       Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  orderId        String?
+  rating         Int       @default(5)
+  comment        String?
+  createdAt      DateTime  @default(now())
+
+  @@index([organizationId])
+  @@index([customerId])
+}
+
+model Reservation {
+  id             String    @id @default(cuid())
+  organizationId String
+  outletId       String
+  customerId     String?
+  customer       Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  tableId        String?
+  partySize      Int       @default(2)
+  reservedAt     DateTime
+  status         String    @default("BOOKED") // BOOKED | CONFIRMED | SEATED | COMPLETED | CANCELLED | NO_SHOW
+  notes          String?
+  createdById    String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([organizationId, outletId])
+  @@index([outletId, reservedAt])
+}
+
+// Table occupancy locks: one row per (table, 15-minute slot) held by an active
+// reservation. The unique constraint makes concurrent double-booking impossible
+// at the database level on SQLite and PostgreSQL alike (see reservations.ts).
+model ReservationSlot {
+  id             String   @id @default(cuid())
+  organizationId String
+  tableId        String
+  slot           DateTime // slot start (UTC, aligned to 15 minutes)
+  reservationId  String
+  createdAt      DateTime @default(now())
+
+  @@unique([tableId, slot])
+  @@index([reservationId])
+  @@index([organizationId])
+}
+
+model WaitlistEntry {
+  id             String   @id @default(cuid())
+  organizationId String
+  outletId       String
+  customerName   String
+  phone          String?
+  partySize      Int      @default(2)
+  status         String   @default("WAITING") // WAITING | ARRIVED | SEATED | LEFT | CANCELLED
+  estWaitMins    Int      @default(15)
+  createdAt      DateTime @default(now())
+
+  @@index([organizationId, outletId, status])
+}
+
+// ============================================================
+// ORDERS / POS / BILLING / PAYMENTS
+// ============================================================
+
+model Order {
+  id             String           @id @default(cuid())
+  organizationId String
+  outletId       String
+  channel        String           @default("DINE_IN") // DINE_IN | TAKEAWAY | DELIVERY | QR | ONLINE | AGGREGATOR
+  source         String           @default("POS") // POS | QR | ONLINE | PETPOOJA | MANUAL | ZOMATO | SWIGGY
+  // Idempotency: (outletId, source, externalRef) is unique so a re-delivered
+  // POS/webhook order cannot create a duplicate. See webhook + reconciliation.
+  externalRef    String?
+  tableId        String?
+  table          RestaurantTable? @relation(fields: [tableId], references: [id], onDelete: SetNull)
+  customerId     String?
+  customer       Customer?        @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  status         String           @default("OPEN") // OPEN | SENT | PREPARING | READY | SERVED | BILLED | PAID | CANCELLED | REFUNDED
+  invoiceNo      String?
+  subtotal       Decimal          @default(0)
+  discount       Decimal          @default(0)
+  tax            Decimal          @default(0)
+  total          Decimal          @default(0)
+  // Set true exactly once when the recipe explosion has depleted stock,
+  // guarding against double consumption at the aggregate level.
+  stockConsumed  Boolean          @default(false)
+  covers         Int              @default(1)
+  notes          String?
+  // Client-supplied Idempotency-Key for order creation: a retry returns the
+  // original order; reuse with a different request is rejected (requestHash).
+  idempotencyKey String?
+  requestHash    String?
+  createdById    String?
+  billedAt       DateTime?
+  paidAt         DateTime?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  items    OrderItem[]
+  payments Payment[]
+  kots     Kot[]
+
+  @@unique([outletId, source, externalRef])
+  @@unique([organizationId, idempotencyKey])
+  @@index([organizationId, outletId, createdAt])
+  @@index([outletId, status])
+  @@index([customerId])
+}
+
+model OrderItem {
+  id             String    @id @default(cuid())
+  organizationId String
+  outletId       String
+  orderId        String
+  order          Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  menuItemId     String?
+  menuItem       MenuItem? @relation(fields: [menuItemId], references: [id], onDelete: SetNull)
+  posItemCode    String? // captured even when unmapped
+  name           String // snapshot of item name at time of order
+  qty            Decimal   @default(1)
+  unitPrice      Decimal   @default(0)
+  discount       Decimal   @default(0)
+  taxPct         Decimal   @default(0)
+  lineTotal      Decimal   @default(0)
+  station        String    @default("KITCHEN")
+  notes          String?
+  createdAt      DateTime  @default(now())
+
+  modifiers OrderItemModifier[]
+  kotItems  KotItem[]
+
+  @@index([orderId])
+  @@index([organizationId, outletId])
+  @@index([menuItemId])
+}
+
+model OrderItemModifier {
+  id          String    @id @default(cuid())
+  orderItemId String
+  orderItem   OrderItem @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+  name        String
+  priceDelta  Decimal   @default(0)
+
+  @@index([orderItemId])
+}
+
+// Append-only payment record. Refunds are separate rows; success is set
+// server-side only (never trusted from the client). See PaymentProvider.
+model Payment {
+  id             String    @id @default(cuid())
+  organizationId String
+  outletId       String
+  orderId        String
+  order          Order     @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  method         String // CASH | UPI | CARD | WALLET | ONLINE | OTHER
+  status         String    @default("PENDING") // PENDING | SUCCESS | FAILED | REFUNDED | PARTIAL
+  amount         Decimal
+  providerRef    String?
+  provider       String? // mock | razorpay | stripe
+  verifiedAt     DateTime?
+  actorId        String?
+  /// Client Idempotency-Key: a retried creation returns this payment instead of a second one.
+  idempotencyKey String?
+  requestHash    String?
+  createdAt      DateTime  @default(now())
+
+  refunds Refund[]
+
+  @@unique([provider, providerRef])
+  @@unique([organizationId, idempotencyKey])
+  @@index([organizationId, outletId, createdAt])
+  @@index([orderId])
+}
+
+model Refund {
+  id             String   @id @default(cuid())
+  organizationId String
+  outletId       String
+  paymentId      String
+  payment        Payment  @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  amount         Decimal
+  reason         String?
+  // Client-supplied key so a retried refund request cannot post twice.
+  idempotencyKey String?
+  // Gateway refund id (refund executed at / reported by the payment provider).
+  providerRef    String?
+  actorId        String?
+  createdAt      DateTime @default(now())
+
+  @@unique([organizationId, idempotencyKey])
+  @@unique([organizationId, providerRef])
+  @@index([paymentId])
+  @@index([organizationId, outletId])
+}
+
+// ============================================================
+// KOT / KDS
+// ============================================================
+
+model KitchenStation {
+  id             String  @id @default(cuid())
+  organizationId String
+  outletId       String
+  name           String // "Main Kitchen", "Bar"
+  kind           String  @default("KITCHEN")
+  active         Boolean @default(true)
+
+  kots Kot[]
+
+  @@unique([outletId, name])
+  @@index([organizationId, outletId])
+}
+
+model Kot {
+  id             String          @id @default(cuid())
+  organizationId String
+  outletId       String
+  orderId        String
+  order          Order           @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  stationId      String?
+  station        KitchenStation? @relation(fields: [stationId], references: [id], onDelete: SetNull)
+  number         Int
+  status         String          @default("NEW") // NEW | ACCEPTED | PREPARING | READY | SERVED | CANCELLED
+  printedAt      DateTime?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  items KotItem[]
+
+  @@unique([outletId, number])
+  @@index([organizationId, outletId, status])
+  @@index([orderId])
+}
+
+model KotItem {
+  id          String     @id @default(cuid())
+  kotId       String
+  kot         Kot        @relation(fields: [kotId], references: [id], onDelete: Cascade)
+  orderItemId String?
+  orderItem   OrderItem? @relation(fields: [orderItemId], references: [id], onDelete: SetNull)
+  name        String
+  qty         Decimal    @default(1)
+  status      String     @default("NEW")
+  notes       String?
+
+  @@index([kotId])
+}
+
+// ============================================================
+// PROCUREMENT (procure-to-pay)
+// ============================================================
+
+model PurchaseIndent {
+  id             String   @id @default(cuid())
+  organizationId String
+  outletId       String
+  number         String
+  departmentId   String?
+  status         String   @default("DRAFT") // DRAFT | SUBMITTED | APPROVED | CLOSED | CANCELLED
+  notes          String?
+  createdById    String?
+  approvedById   String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  lines PurchaseIndentLine[]
+
+  @@unique([outletId, number])
+  @@index([organizationId, outletId, status])
+}
+
+model PurchaseIndentLine {
+  id             String         @id @default(cuid())
+  organizationId String
+  indentId       String
+  indent         PurchaseIndent @relation(fields: [indentId], references: [id], onDelete: Cascade)
+  materialId     String
+  qty            Decimal
+  unitId         String?
+
+  @@index([indentId])
+}
+
+model PurchaseOrder {
+  id             String    @id @default(cuid())
+  organizationId String
+  outletId       String
+  number         String
+  vendorId       String
+  status         String    @default("DRAFT") // DRAFT | SUBMITTED | APPROVED | ORDERED | PARTIAL | RECEIVED | BILLED | CLOSED | CANCELLED
+  expectedDate   DateTime?
+  subtotal       Decimal   @default(0)
+  tax            Decimal   @default(0)
+  total          Decimal   @default(0)
+  notes          String?
+  createdById    String?
+  approvedById   String?
+  approvedAt     DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  lines    PurchaseOrderLine[]
+  receipts GoodsReceipt[]
+
+  @@unique([outletId, number])
+  @@index([organizationId, outletId, status])
+  @@index([vendorId])
+}
+
+model PurchaseOrderLine {
+  id             String        @id @default(cuid())
+  organizationId String
+  poId           String
+  po             PurchaseOrder @relation(fields: [poId], references: [id], onDelete: Cascade)
+  materialId     String
+  qty            Decimal
+  rate           Decimal
+  taxPct         Decimal       @default(0)
+  receivedQty    Decimal       @default(0)
+  unitId         String?
+
+  @@index([poId])
+  @@index([materialId])
+}
+
+model GoodsReceipt {
+  id             String         @id @default(cuid())
+  organizationId String
+  outletId       String
+  number         String
+  poId           String?
+  po             PurchaseOrder? @relation(fields: [poId], references: [id], onDelete: SetNull)
+  vendorId       String
+  status         String         @default("DRAFT") // DRAFT | POSTED (posting writes the inventory ledger)
+  receivedAt     DateTime       @default(now())
+  notes          String?
+  createdById    String?
+  postedAt       DateTime?
+  createdAt      DateTime       @default(now())
+
+  lines GoodsReceiptLine[]
+  bills PurchaseBill[]
+
+  @@unique([outletId, number])
+  @@index([organizationId, outletId, status])
+  @@index([vendorId])
+  @@index([poId])
+}
+
+model GoodsReceiptLine {
+  id             String       @id @default(cuid())
+  organizationId String
+  grnId          String
+  grn            GoodsReceipt @relation(fields: [grnId], references: [id], onDelete: Cascade)
+  materialId     String
+  qty            Decimal
+  rate           Decimal
+  damagedQty     Decimal      @default(0)
+  batchNo        String?
+  expiryDate     DateTime?
+  unitId         String?
+
+  @@index([grnId])
+  @@index([materialId])
+}
+
+model PurchaseBill {
+  id             String        @id @default(cuid())
+  organizationId String
+  outletId       String
+  number         String
+  vendorId       String
+  grnId          String?
+  grn            GoodsReceipt? @relation(fields: [grnId], references: [id], onDelete: SetNull)
+  billDate       DateTime      @default(now())
+  dueDate        DateTime?
+  subtotal       Decimal       @default(0)
+  tax            Decimal       @default(0)
+  total          Decimal       @default(0)
+  paidAmount     Decimal       @default(0)
+  status         String        @default("OPEN") // OPEN | PARTIAL | PAID | CANCELLED
+  createdById    String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  lines    PurchaseBillLine[]
+  payments VendorPayment[]
+
+  @@unique([outletId, number])
+  @@index([organizationId, outletId, status])
+  @@index([vendorId])
+}
+
+model PurchaseBillLine {
+  id             String       @id @default(cuid())
+  organizationId String
+  billId         String
+  bill           PurchaseBill @relation(fields: [billId], references: [id], onDelete: Cascade)
+  materialId     String
+  qty            Decimal
+  rate           Decimal
+  taxPct         Decimal      @default(0)
+
+  @@index([billId])
+}
+
+model VendorPayment {
+  id             String        @id @default(cuid())
+  organizationId String
+  outletId       String
+  vendorId       String
+  billId         String?
+  bill           PurchaseBill? @relation(fields: [billId], references: [id], onDelete: SetNull)
+  amount         Decimal
+  method         String        @default("BANK") // CASH | BANK | UPI | CHEQUE
+  reference      String?
+  // Client-supplied key so a retried payment request cannot post twice.
+  idempotencyKey String?
+  paidAt         DateTime      @default(now())
+  actorId        String?
+  createdAt      DateTime      @default(now())
+
+  @@unique([organizationId, idempotencyKey])
+  @@index([organizationId, outletId])
+  @@index([vendorId])
+  @@index([billId])
+}
+
+// ============================================================
+// INVENTORY LEDGER (append-only — the single source of truth)
+// ============================================================
+
+model InventoryLedger {
+  id             String            @id @default(cuid())
+  organizationId String
+  outletId       String
+  departmentId   String?
+  materialId     String
+  material       Material          @relation(fields: [materialId], references: [id], onDelete: Restrict)
+  unitId         String?
+  unit           Unit?             @relation(fields: [unitId], references: [id], onDelete: SetNull)
+  // OPENING_BALANCE | PURCHASE_RECEIPT | SALE_CONSUMPTION | ISSUE |
+  // TRANSFER_OUT | TRANSFER_IN | PRODUCTION_CONSUMPTION | PRODUCTION_OUTPUT |
+  // WASTAGE | SPOILAGE | STAFF_MEAL | COUNT_ADJUSTMENT | RETURN | OTHER_ADJUSTMENT
+  txnType        String
+  // Signed quantity in base unit: positive = stock in, negative = stock out.
+  qty            Decimal
+  rate           Decimal           @default(0) // unit cost at time of movement
+  amount         Decimal           @default(0) // qty * rate (signed)
+  // Provenance
+  sourceType     String? // GRN | ORDER | TRANSFER | ISSUE | WASTAGE | COUNT | PRODUCTION | MANUAL
+  sourceId       String?
+  // Idempotency guard: a unique source reference means the same business
+  // event can never write two consumption rows. Duplicate webhook => no-op.
+  sourceRef      String?           @unique
+  batchNo        String?
+  expiryDate     DateTime?
+  note           String?
+  // Correction chain (append-only): a mistake is fixed with a new row.
+  correctionOfId String?
+  correctionOf   InventoryLedger?  @relation("LedgerCorrection", fields: [correctionOfId], references: [id], onDelete: Restrict)
+  corrections    InventoryLedger[] @relation("LedgerCorrection")
+  actorId        String?
+  createdAt      DateTime          @default(now())
+
+  @@index([organizationId, outletId, materialId])
+  @@index([materialId, createdAt])
+  @@index([outletId, txnType])
+  @@index([sourceType, sourceId])
+}
+
+// ============================================================
+// STOCK OPERATIONS (each posts to the ledger)
+// ============================================================
+
+model InventoryTransfer {
+  id             String    @id @default(cuid())
+  organizationId String
+  number         String
+  fromOutletId   String
+  toOutletId     String
+  status         String    @default("DRAFT") // DRAFT | DISPATCHED | RECEIVED | CANCELLED
+  notes          String?
+  createdById    String?
+  dispatchedAt   DateTime?
+  receivedAt     DateTime?
+  createdAt      DateTime  @default(now())
+
+  lines InventoryTransferLine[]
+
+  @@unique([organizationId, number])
+  @@index([organizationId, status])
+  @@index([fromOutletId])
+  @@index([toOutletId])
+}
+
+model InventoryTransferLine {
+  id             String            @id @default(cuid())
+  organizationId String
+  transferId     String
+  transfer       InventoryTransfer @relation(fields: [transferId], references: [id], onDelete: Cascade)
+  materialId     String
+  requestedQty   Decimal
+  dispatchedQty  Decimal           @default(0)
+  receivedQty    Decimal           @default(0)
+  damagedQty     Decimal           @default(0)
+  unitId         String?
+
+  @@index([transferId])
+  @@index([materialId])
+}
+
+model InventoryIssue {
+  id               String    @id @default(cuid())
+  organizationId   String
+  outletId         String
+  number           String
+  fromDepartmentId String?
+  toDepartmentId   String?
+  status           String    @default("DRAFT") // DRAFT | ISSUED | CANCELLED
+  notes            String?
+  createdById      String?
+  issuedAt         DateTime?
+  createdAt        DateTime  @default(now())
+
+  lines InventoryIssueLine[]
+
+  @@unique([outletId, number])
+  @@index([organizationId, outletId, status])
+}
+
+model InventoryIssueLine {
+  id             String         @id @default(cuid())
+  organizationId String
+  issueId        String
+  issue          InventoryIssue @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  materialId     String
+  qty            Decimal
+  unitId         String?
+
+  @@index([issueId])
+  @@index([materialId])
+}
+
+model Wastage {
+  id             String   @id @default(cuid())
+  organizationId String
+  outletId       String
+  departmentId   String?
+  number         String
+  reason         String   @default("SPOILAGE") // SPOILAGE | SPILLAGE | PREP_LOSS | EXPIRED | DAMAGED | STAFF_MEAL | OVERPRODUCTION | OTHER
+  status         String   @default("POSTED") // DRAFT | POSTED | CANCELLED (posting writes the ledger)
+  notes          String?
+  createdById    String?
+  createdAt      DateTime @default(now())
+
+  lines WastageLine[]
+
+  @@unique([outletId, number])
+  @@index([organizationId, outletId])
+}
+
+model WastageLine {
+  id             String  @id @default(cuid())
+  organizationId String
+  wastageId      String
+  wastage        Wastage @relation(fields: [wastageId], references: [id], onDelete: Cascade)
+  materialId     String
+  qty            Decimal
+  estCost        Decimal @default(0)
+  unitId         String?
+
+  @@index([wastageId])
+  @@index([materialId])
+}
+
+model StockCount {
+  id             String    @id @default(cuid())
+  organizationId String
+  outletId       String
+  departmentId   String?
+  number         String
+  status         String    @default("DRAFT") // DRAFT | COUNTING | REVIEW | APPROVED | CANCELLED
+  frozenAt       DateTime? // when book quantities were snapshotted
+  approvedById   String?
+  approvedAt     DateTime?
+  createdById    String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  lines StockCountLine[]
+
+  @@unique([outletId, number])
+  @@index([organizationId, outletId, status])
+}
+
+model StockCountLine {
+  id             String     @id @default(cuid())
+  organizationId String
+  countId        String
+  count          StockCount @relation(fields: [countId], references: [id], onDelete: Cascade)
+  materialId     String
+  bookQty        Decimal    @default(0) // frozen snapshot — never overwritten after approval
+  physicalQty    Decimal    @default(0)
+  variance       Decimal    @default(0)
+  costImpact     Decimal    @default(0)
+  unitId         String?
+
+  @@index([countId])
+  @@index([materialId])
+}
+
+model ProductionBatch {
+  id               String    @id @default(cuid())
+  organizationId   String
+  outletId         String
+  number           String
+  recipeVersionId  String?
+  outputMaterialId String
+  plannedQty       Decimal
+  actualQty        Decimal   @default(0)
+  batchNo          String?
+  expiryDate       DateTime?
+  status           String    @default("DRAFT") // DRAFT | IN_PROGRESS | COMPLETED | CANCELLED
+  createdById      String?
+  completedAt      DateTime?
+  createdAt        DateTime  @default(now())
+
+  lines ProductionLine[]
+
+  @@unique([outletId, number])
+  @@index([organizationId, outletId, status])
+}
+
+model ProductionLine {
+  id             String          @id @default(cuid())
+  organizationId String
+  batchId        String
+  batch          ProductionBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  materialId     String
+  qty            Decimal // consumed input quantity
+  unitId         String?
+
+  @@index([batchId])
+  @@index([materialId])
+}
+
+// ============================================================
+// FINANCE
+// ============================================================
+
+model Expense {
+  id             String   @id @default(cuid())
+  organizationId String
+  outletId       String
+  category       String // RENT | UTILITIES | SALARY | REPAIRS | MISC ...
+  amount         Decimal
+  description    String?
+  paidVia        String   @default("CASH") // CASH | BANK | UPI | PETTY_CASH
+  attachmentUrl  String?
+  spentAt        DateTime @default(now())
+  createdById    String?
+  createdAt      DateTime @default(now())
+
+  @@index([organizationId, outletId, spentAt])
+}
+
+// Append-only petty-cash ledger.
+model PettyCashTxn {
+  id             String   @id @default(cuid())
+  organizationId String
+  outletId       String
+  type           String // OPENING | ADD | EXPENSE | ADJUST
+  amount         Decimal // signed: + in, - out
+  category       String?
+  reason         String?
+  attachmentUrl  String?
+  approvedById   String?
+  actorId        String?
+  createdAt      DateTime @default(now())
+
+  @@index([organizationId, outletId, createdAt])
+}
+
+model CashDrawerSession {
+  id             String    @id @default(cuid())
+  organizationId String
+  outletId       String
+  openedById     String?
+  openingFloat   Decimal   @default(0)
+  closingCount   Decimal?
+  status         String    @default("OPEN") // OPEN | CLOSED
+  openedAt       DateTime  @default(now())
+  closedAt       DateTime?
+
+  @@index([organizationId, outletId, status])
+}
+
+model Reconciliation {
+  id             String   @id @default(cuid())
+  organizationId String
+  outletId       String
+  businessDate   DateTime
+  // PAYMENTS (counted collections per method) | POS (provider orders vs local)
+  // | GATEWAY (payment provider vs local payments) | AGGREGATOR (settlements vs
+  // expected payouts) | VENDOR (bills vs vendor payments)
+  kind           String   @default("PAYMENTS")
+  status         String   @default("DRAFT") // DRAFT | COMPLETED (completed = locked)
+  notes          String?
+  createdById    String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  lines ReconciliationLine[]
+
+  @@unique([outletId, businessDate, kind])
+  @@index([organizationId, outletId])
+}
+
+model ReconciliationLine {
+  id               String         @id @default(cuid())
+  organizationId   String
+  reconciliationId String
+  reconciliation   Reconciliation @relation(fields: [reconciliationId], references: [id], onDelete: Cascade)
+  // PAYMENTS: the payment method. Other kinds: the compared item's reference
+  // (e.g. "order:<externalRef>", "payment:<providerRef>", "bill:<number>", "TOTAL").
+  method           String
+  expected         Decimal        @default(0)
+  actual           Decimal        @default(0)
+  difference       Decimal        @default(0)
+  note             String?
+
+  @@index([reconciliationId])
+}
+
+// ============================================================
+// AGGREGATORS
+// ============================================================
+
+model Aggregator {
+  id             String  @id @default(cuid())
+  organizationId String
+  name           String // ZOMATO | SWIGGY | ...
+  commissionPct  Decimal @default(0)
+  active         Boolean @default(true)
+
+  orders      AggregatorOrder[]
+  settlements AggregatorSettlement[]
+
+  @@unique([organizationId, name])
+  @@index([organizationId])
+}
+
+model AggregatorOrder {
+  id             String     @id @default(cuid())
+  organizationId String
+  outletId       String
+  aggregatorId   String
+  aggregator     Aggregator @relation(fields: [aggregatorId], references: [id], onDelete: Cascade)
+  externalId     String
+  orderId        String? // linked internal order
+  grossAmount    Decimal    @default(0)
+  discount       Decimal    @default(0)
+  commission     Decimal    @default(0)
+  tax            Decimal    @default(0)
+  platformFee    Decimal    @default(0)
+  netPayout      Decimal    @default(0)
+  placedAt       DateTime   @default(now())
+
+  @@unique([aggregatorId, externalId])
+  @@index([organizationId, outletId])
+}
+
+model AggregatorSettlement {
+  id             String     @id @default(cuid())
+  organizationId String
+  outletId       String
+  aggregatorId   String
+  aggregator     Aggregator @relation(fields: [aggregatorId], references: [id], onDelete: Cascade)
+  periodFrom     DateTime
+  periodTo       DateTime
+  expectedPayout Decimal    @default(0)
+  actualPayout   Decimal    @default(0)
+  difference     Decimal    @default(0)
+  createdAt      DateTime   @default(now())
+
+  @@index([organizationId, outletId])
+}
+
+// ============================================================
+// PEOPLE
+// ============================================================
+
+model Attendance {
+  id             String    @id @default(cuid())
+  organizationId String
+  outletId       String
+  userId         String
+  checkIn        DateTime
+  checkOut       DateTime?
+  status         String    @default("PRESENT") // PRESENT | LATE | ABSENT | LEAVE
+  note           String?
+  createdAt      DateTime  @default(now())
+
+  @@index([organizationId, outletId, userId])
+  @@index([userId, checkIn])
+}
+
+model Shift {
+  id             String @id @default(cuid())
+  organizationId String
+  outletId       String
+  name           String
+  startTime      String // "09:00"
+  endTime        String // "17:00"
+
+  @@index([organizationId, outletId])
+}
+
+model LeaveRequest {
+  id             String   @id @default(cuid())
+  organizationId String
+  outletId       String
+  userId         String
+  fromDate       DateTime
+  toDate         DateTime
+  reason         String?
+  status         String   @default("PENDING") // PENDING | APPROVED | REJECTED
+  approvedById   String?
+  createdAt      DateTime @default(now())
+
+  @@index([organizationId, outletId, userId])
+}
+
+model Task {
+  id             String    @id @default(cuid())
+  organizationId String
+  outletId       String
+  title          String
+  description    String?
+  assignedToId   String?
+  priority       String    @default("MEDIUM") // LOW | MEDIUM | HIGH
+  status         String    @default("OPEN") // OPEN | IN_PROGRESS | DONE | VERIFIED | CANCELLED
+  dueAt          DateTime?
+  completedById  String?
+  completedAt    DateTime?
+  verifiedById   String?
+  createdById    String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([organizationId, outletId, status])
+  @@index([assignedToId])
+}
+
+// ============================================================
+// INTEGRATIONS / SYSTEM / OBSERVABILITY
+// ============================================================
+
+// Idempotency + audit for inbound webhooks (POS, payments, aggregators).
+model WebhookEvent {
+  id             String    @id @default(cuid())
+  organizationId String?
+  provider       String // petpooja | razorpay | zomato | ...
+  eventId        String // provider's unique event/order id
+  eventType      String?
+  signatureValid Boolean   @default(false)
+  status         String    @default("RECEIVED") // RECEIVED | PROCESSED | FAILED | DUPLICATE
+  payload        String // raw JSON
+  error          String?
+  receivedAt     DateTime  @default(now())
+  processedAt    DateTime?
+
+  // The core idempotency guard for inbound events.
+  @@unique([provider, eventId])
+  @@index([status])
+  @@index([provider, receivedAt])
+}
+
+// POS items sold with no recipe mapping — surfaced, never silently dropped.
+model UnmappedSale {
+  id               String    @id @default(cuid())
+  organizationId   String
+  outletId         String
+  posCode          String
+  posName          String?
+  qty              Decimal   @default(0)
+  source           String    @default("POS")
+  status           String    @default("OPEN") // OPEN | MAPPED | IGNORED
+  mappedMenuItemId String?
+  resolvedById     String?
+  resolvedAt       DateTime?
+  firstSeenAt      DateTime  @default(now())
+  lastSeenAt       DateTime  @default(now())
+
+  @@unique([outletId, source, posCode])
+  @@index([organizationId, outletId, status])
+}
+
+model IntegrationConnection {
+  id             String    @id @default(cuid())
+  organizationId String
+  outletId       String?
+  kind           String // POS | PAYMENT | AGGREGATOR | SHEETS | WHATSAPP | EMAIL
+  provider       String
+  status         String    @default("DISCONNECTED") // CONNECTED | DISCONNECTED | ERROR
+  // Config holds NON-secret settings only; secrets live in env vars.
+  config         String? // JSON
+  lastCheckedAt  DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@unique([organizationId, outletId, kind, provider])
+  @@index([organizationId])
+}
+
+model SyncJob {
+  id             String    @id @default(cuid())
+  organizationId String
+  kind           String // SHEETS_PUSH | SHEETS_PULL | RECONCILE
+  status         String    @default("PENDING") // PENDING | RUNNING | SUCCESS | FAILED
+  direction      String? // PUSH | PULL
+  detail         String?
+  startedAt      DateTime?
+  finishedAt     DateTime?
+  createdAt      DateTime  @default(now())
+
+  @@index([organizationId, kind, status])
+}
+
+model ExportJob {
+  id             String    @id @default(cuid())
+  organizationId String
+  outletId       String?
+  kind           String // report id: DAILY_SALES | ITEM_SALES | INVENTORY | PNL | ...
+  format         String    @default("CSV")
+  status         String    @default("PENDING") // PENDING | RUNNING | SUCCESS | FAILED
+  filePath       String? // null: CSV is streamed back in the response, not stored
+  params         String? // JSON of the validated filters (no secrets)
+  rowCount       Int?
+  error          String?
+  requestedById  String?
+  createdAt      DateTime  @default(now())
+  finishedAt     DateTime?
+
+  @@index([organizationId, kind])
+}
+
+model Anomaly {
+  id             String    @id @default(cuid())
+  organizationId String
+  outletId       String?
+  departmentId   String?
+  type           String // NEGATIVE_STOCK | COUNT_VARIANCE | PRICE_SPIKE | UNMAPPED_ITEM | HEAVY_WASTAGE
+  severity       String    @default("MEDIUM") // LOW | MEDIUM | HIGH | CRITICAL
+  entityType     String?
+  entityId       String?
+  message        String
+  status         String    @default("OPEN") // OPEN | ACKNOWLEDGED | RESOLVED | DISMISSED
+  resolvedById   String?
+  resolutionNote String?
+  detectedAt     DateTime  @default(now())
+  resolvedAt     DateTime?
+
+  @@index([organizationId, outletId, status])
+  @@index([type, severity])
+}
+
+model Notification {
+  id             String    @id @default(cuid())
+  organizationId String
+  outletId       String?
+  userId         String? // null => broadcast to org/outlet
+  channel        String    @default("IN_APP") // IN_APP | EMAIL | WHATSAPP | PUSH
+  type           String
+  title          String
+  body           String?
+  readAt         DateTime?
+  createdAt      DateTime  @default(now())
+
+  @@index([organizationId, outletId])
+  @@index([userId, readAt])
+}
+
+// Append-only audit trail. Normal users can never delete these rows.
+model AuditLog {
+  id             String   @id @default(cuid())
+  organizationId String
+  outletId       String?
+  actorId        String?
+  action         String // CREATE | UPDATE | VOID | APPROVE | REJECT | LOGIN | LOGOUT | PAYMENT | REFUND | ...
+  entityType     String
+  entityId       String?
+  before         String? // JSON snapshot
+  after          String? // JSON snapshot
+  ip             String?
+  userAgent      String?
+  createdAt      DateTime @default(now())
+
+  @@index([organizationId, outletId, createdAt])
+  @@index([entityType, entityId])
+  @@index([actorId])
+}

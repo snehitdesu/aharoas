@@ -1,0 +1,43 @@
+# dependencies
+/node_modules
+/.pnp
+.pnp.js
+
+# next
+/.next/
+/out/
+next-env.d.ts
+
+# production
+/build
+
+# env — never commit secrets
+.env
+.env.local
+.env*.local
+
+# database (local sqlite)
+/prisma/*.db
+/prisma/*.db-journal
+/prisma/dev.db*
+
+# misc
+.DS_Store
+*.pem
+npm-debug.log*
+/coverage
+.vscode/*
+!.vscode/extensions.json
+
+# generated PostgreSQL variant (npm run db:pg:schema)
+/prisma/postgres/
+
+# Playwright
+/e2e/.auth/
+/e2e/.results/
+/e2e/.report/
+
+# stray local databases / TypeScript incremental build info
+/*.db
+/*.db-journal
+*.tsbuildinfo

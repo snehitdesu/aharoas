@@ -1,0 +1,53 @@
+# CI for the Aharos backend.
+# NOTE: this workflow has not been executed yet (no CI runner was available when
+# it was written). The `postgres` job is the path for validating the PostgreSQL
+# branches (raw SQL in analytics, serializable transactions, constraints) that
+# were only verified statically. See docs/postgres.md.
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  sqlite:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - run: npx prisma validate && npx prisma generate
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
+
+  postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: aharos
+          POSTGRES_PASSWORD: aharos
+          POSTGRES_DB: aharos_test
+          # Non-UTC server zone on purpose: raw SQL must not depend on the session
+          # TimeZone (a UTC-only CI hid a date-range shift in analytics).
+          TZ: Asia/Kolkata
+          PGTZ: Asia/Kolkata
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U aharos" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql://aharos:aharos@localhost:5432/aharos_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - run: npm run test:pg
+      - name: Baseline migration SQL (artifact for review)
+        run: DATABASE_URL=$TEST_DATABASE_URL npx prisma migrate diff --from-empty --to-schema-datamodel prisma/postgres/schema.prisma --script > postgres-baseline.sql
+      - uses: actions/upload-artifact@v4
+        with: { name: postgres-baseline, path: postgres-baseline.sql }
