@@ -3,7 +3,7 @@ import { prisma } from "@/server/db/client";
 import { createRouter, outletQuery } from "@/server/api/router";
 import { TaskStatus } from "@/constants/enums";
 import {
-  listStaff, createStaff, assignMembership, revokeMembership, setUserActive,
+  listStaff, createStaff, assignMembership, revokeMembership, setUserActive, issuePasswordLink,
   checkIn, checkOut, correctAttendance, listShifts, createShift, requestLeave, approveLeave, rejectLeave,
   listTasks, createTask, transitionTask, cancelTask,
 } from "@/server/services/staff";
@@ -22,6 +22,7 @@ export const { GET, POST, PATCH, DELETE } = createRouter([
   { method: "POST", path: "memberships", handler: ({ ctx, body }) => assignMembership(ctx, body as never) },
   { method: "DELETE", path: "memberships/:id", handler: ({ ctx, params }) => revokeMembership(ctx, params.id) },
   { method: "POST", path: "users/:id/active", handler: ({ ctx, params, body }) => setUserActive(ctx, params.id, z.object({ active: z.boolean() }).parse(body).active) },
+  { method: "POST", path: "users/:id/password-link", handler: ({ ctx, params }) => issuePasswordLink(ctx, params.id) },
   { method: "POST", path: "attendance/check-in", handler: ({ ctx, body }) => checkIn(ctx, body as never) },
   { method: "POST", path: "attendance/:id/check-out", handler: ({ ctx, params }) => checkOut(ctx, params.id) },
   { method: "PATCH", path: "attendance/:id", handler: ({ ctx, params, body }) => correctAttendance(ctx, params.id, body as never) },

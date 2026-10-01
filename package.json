@@ -17,6 +17,7 @@
     "db:reset": "prisma migrate reset --force",
     "db:seed": "tsx prisma/seed.ts",
     "db:studio": "prisma studio",
+    "bootstrap:owner": "tsx scripts/bootstrap-owner.ts",
     "setup": "prisma generate && prisma db push && tsx prisma/seed.ts",
     "db:pg:schema": "node scripts/pg-schema.mjs",
     "test:pg": "node scripts/pg-schema.mjs && prisma generate --schema prisma/postgres/schema.prisma && vitest run",

@@ -12,7 +12,9 @@
  *    can never be deactivated or have that membership revoked.
  *
  * Admins never handle another user's password — new staff are created with an
- * unusable placeholder hash and set their own password via the (future) invite flow.
+ * unusable placeholder hash plus a one-time SETUP link (returned once to the
+ * creator), and set their own password through it. `issuePasswordLink` gives a
+ * fresh SETUP/RESET link under the same authority rules.
  */
 import { randomBytes } from "node:crypto";
 import type { PrismaClient } from "@prisma/client";
@@ -26,6 +28,7 @@ import { TASK_TRANSITIONS } from "@/constants/enums";
 import { writeAudit } from "@/server/audit/log";
 import { hashPassword } from "@/server/auth/password";
 import { revokeAllForUser } from "@/server/auth/session";
+import { issuePasswordToken, retireUserTokens } from "@/server/auth/passwordTokens";
 import { type Client, type Tx, runInTx, assertTransition } from "@/server/services/_workflow";
 
 // Shared with the UI (single source of truth in constants/enums).
@@ -121,12 +124,32 @@ export async function createStaff(ctx: AccessContext, input: z.input<typeof crea
     if (data.outletId) await assertOutletInOrg(tx, ctx, data.outletId);
     const email = data.email.toLowerCase();
     if (await tx.user.findUnique({ where: { email } })) throw new ValidationError("A user with this email already exists");
-    // Unusable placeholder hash — the user must set a password via invite/reset.
+    // Unusable placeholder hash — the user must set a password via the setup link.
     const placeholder = await hashPassword(randomBytes(24).toString("hex"));
     const user = await tx.user.create({ data: { organizationId: ctx.organizationId, email, name: data.name, phone: data.phone, passwordHash: placeholder, active: true } });
     await tx.membership.create({ data: { organizationId: ctx.organizationId, userId: user.id, outletId: data.outletId ?? null, role: data.role } });
     await writeAudit(tx, ctx, { action: "CREATE", entityType: "User", entityId: user.id, outletId: data.outletId, after: { email, role: data.role, outletId: data.outletId ?? null } });
-    return { id: user.id, email: user.email, name: user.name };
+    const setup = await issuePasswordToken(tx, { organizationId: ctx.organizationId, userId: user.id, purpose: "SETUP", createdById: actor(ctx) });
+    await writeAudit(tx, ctx, { action: "PASSWORD_LINK", entityType: "User", entityId: user.id, outletId: data.outletId, after: { purpose: "SETUP", expiresAt: setup.expiresAt } });
+    return { id: user.id, email: user.email, name: user.name, setup };
+  });
+}
+
+/**
+ * Issue a one-time password link for another user (SETUP if they have never
+ * signed in, otherwise RESET). Same authority as deactivating them; you cannot
+ * issue one for yourself (use change-password). Retires the user's older links.
+ * The raw token is returned once and never stored or audited.
+ */
+export async function issuePasswordLink(ctx: AccessContext, userId: string, db: Client = prisma) {
+  return runInTx(db, async (tx) => {
+    const user = await loadOrgUser(tx, ctx, userId);
+    assertCanManageUser(ctx, user);
+    if (!user.active) throw new ValidationError("User is inactive; reactivate them first");
+    const purpose = user.lastLoginAt ? "RESET" : "SETUP";
+    const link = await issuePasswordToken(tx, { organizationId: ctx.organizationId, userId, purpose, createdById: actor(ctx) });
+    await writeAudit(tx, ctx, { action: "PASSWORD_LINK", entityType: "User", entityId: userId, after: { purpose, expiresAt: link.expiresAt } });
+    return { userId, email: user.email, ...link };
   });
 }
 
@@ -174,7 +197,10 @@ export async function setUserActive(ctx: AccessContext, userId: string, active: 
     if (!active) await assertNotLastOwner(tx, ctx, userId);
     if (user.active === active) return { id: user.id, active };
     const updated = await tx.user.update({ where: { id: userId }, data: { active } });
-    if (!active) await revokeAllForUser(tx, userId); // deactivating kills active sessions
+    if (!active) {
+      await revokeAllForUser(tx, userId); // deactivating kills active sessions
+      await retireUserTokens(tx, userId); // and outstanding setup/reset links
+    }
     await writeAudit(tx, ctx, { action: "UPDATE", entityType: "User", entityId: userId, before: { active: user.active }, after: { active } });
     return { id: updated.id, active: updated.active };
   });

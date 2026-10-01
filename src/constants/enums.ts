@@ -267,6 +267,11 @@ export const AuditAction = makeEnum([
   "STOCK_ADJUSTMENT",
   "EXPORT",
   "IMPORT",
+  "BOOTSTRAP",
+  "PASSWORD_LINK",
+  "PASSWORD_SET",
+  "PASSWORD_RESET_REQUEST",
+  "PASSWORD_CHANGE",
 ] as const);
 export type AuditAction = (typeof AuditAction.values)[number];
 

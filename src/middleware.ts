@@ -16,6 +16,7 @@ export const PROTECTED_PAGES = [
   // back office
   "/reservations", "/tables", "/menu", "/recipes", "/inventory", "/procurement", "/master", "/customers",
   "/staff", "/finance", "/reports", "/exports", "/anomalies", "/notifications", "/settings", "/audit",
+  "/account",
 ];
 
 export function middleware(req: NextRequest) {
@@ -53,5 +54,6 @@ export const config = {
     "/api/:path*", "/dashboard/:path*", "/pos/:path*", "/kitchen/:path*",
     "/reservations/:path*", "/tables/:path*", "/menu/:path*", "/recipes/:path*", "/inventory/:path*", "/procurement/:path*", "/master/:path*", "/customers/:path*",
     "/staff/:path*", "/finance/:path*", "/reports/:path*", "/exports/:path*", "/anomalies/:path*", "/notifications/:path*", "/settings/:path*", "/audit/:path*",
+    "/account/:path*",
   ],
 };

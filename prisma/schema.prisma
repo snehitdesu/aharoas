@@ -113,8 +113,9 @@ model User {
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
 
-  memberships Membership[]
-  sessions    Session[]
+  memberships    Membership[]
+  sessions       Session[]
+  passwordTokens PasswordToken[]
 
   @@unique([email])
   @@index([organizationId, active])
@@ -154,6 +155,24 @@ model Session {
 
   @@index([userId])
   @@index([expiresAt])
+}
+
+// One-time password setup (new staff) / reset links. Only the SHA-256 of the
+// token is stored; a token is single-use (usedAt) and expires.
+model PasswordToken {
+  id             String    @id @default(cuid())
+  organizationId String
+  userId         String
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  purpose        String // SETUP | RESET
+  tokenHash      String    @unique
+  expiresAt      DateTime
+  usedAt         DateTime?
+  createdById    String?
+  createdAt      DateTime  @default(now())
+
+  @@index([userId, usedAt])
+  @@index([organizationId])
 }
 
 // ============================================================

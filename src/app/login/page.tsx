@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getCurrentContext } from "@/server/auth/current-user";
 import { safeReturnPath } from "@/constants/auth";
@@ -15,6 +16,7 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
         <h1 className="text-xl font-semibold tracking-tight">Aharos</h1>
         <p className="mb-5 mt-0.5 text-sm text-ink-500">Sign in to your restaurant workspace</p>
         <LoginForm next={next} />
+        <Link href="/forgot-password" className="mt-4 block text-center text-sm font-medium text-brand-700 hover:underline">Forgot password?</Link>
       </div>
     </main>
   );

@@ -163,11 +163,11 @@ The existing 31 (login, dashboard, POS, modifiers, payment, customers) all passe
 | Low | No health endpoint (middleware whitelisted a missing `/api/health`) | `GET /api/health` (DB ping, no details) |
 
 ### Open findings (not fixed — see docs/production-readiness.md)
-- **Blocker — no account provisioning:** no way to create the first production owner or give staff a password (staff get an unusable placeholder; no invite / reset flow; the seed is refused in production).
+- ~~Blocker — no account provisioning~~ — resolved in Phase 5A: `npm run bootstrap:owner` (first owner on an empty database), one-time setup/reset links (hashed, single-use, expiring; `PasswordToken` table), `/set-password`, `/forgot-password` (no account enumeration), `/account/password` (revokes other sessions). Remaining: no email/SMS delivery for self-service reset links (managers hand links over).
 - Services validate input before authorizing (unauthorized + malformed body → 422 with schema details instead of 403; no data exposure).
 - Export download does not re-check the report's own permission.
 - Unit conversions are looked up in one direction only (the seed has kg→g, so gram recipe lines for kg materials are rejected, with raw ids in the message).
 - One login took 16.6 s under heavy host memory pressure (8 GB RAM, ~1.3 GB free); not reproducible in isolation (120–260 ms) or in later runs.
 
 ## Next phase
-Resolve the MUST items in `docs/production-readiness.md` (account provisioning first), then a controlled single-instance PostgreSQL deployment. RLS before a second, untrusted organization shares the database.
+Resolve the remaining MUST items in `docs/production-readiness.md` (account provisioning is done), then a controlled single-instance PostgreSQL deployment. RLS before a second, untrusted organization shares the database.

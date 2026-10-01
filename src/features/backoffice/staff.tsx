@@ -63,7 +63,31 @@ function ScopeSelect({ value, onChange }: { value: string; onChange: (v: string)
   );
 }
 
-function NewStaffDialog({ open, onClose, onDone, roles }: { open: boolean; onClose: () => void; onDone: () => void; roles: RoleMatrix["roles"] }) {
+type PasswordLink = { email: string; token: string; purpose: "SETUP" | "RESET"; expiresAt: string };
+
+/** Shows a one-time setup/reset link exactly once; the server never returns it again. */
+function PasswordLinkDialog({ link, onClose }: { link: PasswordLink; onClose: () => void }) {
+  const url = `${window.location.origin}/set-password#token=${link.token}`;
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+    } catch {
+      setCopied(false);
+    }
+  };
+  return (
+    <Dialog open onClose={onClose} title={link.purpose === "SETUP" ? "Password setup link" : "Password reset link"} size="md"
+      description={`For ${link.email}. Share it privately — it works once and expires ${formatDateTime(link.expiresAt)}.`}
+      footer={<><Button onClick={copy}>{copied ? "Copied" : "Copy link"}</Button><Button variant="primary" onClick={onClose}>Done</Button></>}>
+      <Field label="Link" name="link"><Input readOnly value={url} onFocus={(e) => e.currentTarget.select()} data-testid="password-link" /></Field>
+      <p className="mt-2 text-xs text-ink-500">This link is shown only now. Issuing a new link cancels this one.</p>
+    </Dialog>
+  );
+}
+
+function NewStaffDialog({ open, onClose, onDone, roles }: { open: boolean; onClose: () => void; onDone: (link: PasswordLink) => void; roles: RoleMatrix["roles"] }) {
   const outletId = useOutletId();
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -72,8 +96,8 @@ function NewStaffDialog({ open, onClose, onDone, roles }: { open: boolean; onClo
   const [scope, setScope] = useState(outletId);
   return (
     <FormDialog open={open} onClose={onClose} title="Add staff member" submitLabel="Add" description="The server checks that you may grant this role at this scope."
-      onSubmit={() => api("/api/staff", { method: "POST", body: { name: name.trim(), email: email.trim(), phone: opt(phone), role, outletId: opt(scope) } })}
-      onDone={() => { setName(""); setEmail(""); setPhone(""); setRole(""); onDone(); }}>
+      onSubmit={() => api<{ email: string; setup: Omit<PasswordLink, "email"> }>("/api/staff", { method: "POST", body: { name: name.trim(), email: email.trim(), phone: opt(phone), role, outletId: opt(scope) } })}
+      onDone={(r) => { setName(""); setEmail(""); setPhone(""); setRole(""); onDone({ email: r.email, ...r.setup }); }}>
       <div className="grid gap-3 sm:grid-cols-2">
         <Field label="Name" name="name" required><Input value={name} onChange={(e) => setName(e.target.value)} required maxLength={120} /></Field>
         <Field label="Email" name="email" required><Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required maxLength={200} /></Field>
@@ -130,6 +154,7 @@ export function TeamScreen() {
   const [scope, setScope] = useState<"outlet" | "all">("outlet");
   const [open, setOpen] = useState(false);
   const [managing, setManaging] = useState<string | null>(null);
+  const [link, setLink] = useState<PasswordLink | null>(null);
   const roles = useQuery<RoleMatrix>("/api/staff/roles");
   const list = usePaged<StaffRow>("/api/staff", { outletId: scope === "outlet" ? outletId ?? undefined : undefined });
   const managed = list.items.find((u) => u.id === managing);
@@ -149,6 +174,12 @@ export function TeamScreen() {
               r.id === me.id ? null : (
                 <div className="flex justify-end gap-1">
                   <Button size="sm" onClick={() => setManaging(r.id)} disabled={!roles.data}>Access</Button>
+                  {r.active && (
+                    <ActionButton size="sm" action={async () => setLink(await api<PasswordLink>(`/api/staff/users/${r.id}/password-link`, { method: "POST" }))}
+                      confirm={{ title: `Issue password link for ${r.name}?`, message: "Creates a one-time link they use to set a new password. Any earlier link stops working; their current password keeps working until the link is used.", confirmLabel: "Issue link" }}>
+                      Password link
+                    </ActionButton>
+                  )}
                   <ActionButton size="sm" variant={r.active ? "danger" : "success"} action={() => api(`/api/staff/users/${r.id}/active`, { method: "POST", body: { active: !r.active } })}
                     confirm={r.active ? { title: `Deactivate ${r.name}?`, message: "They can no longer sign in; existing sessions are revoked by the server.", danger: true, confirmLabel: "Deactivate" } : undefined}
                     success={r.active ? "Deactivated" : "Reactivated"} onDone={list.reload}>{r.active ? "Deactivate" : "Activate"}</ActionButton>
@@ -157,7 +188,8 @@ export function TeamScreen() {
           },
         ]} />
       <Pager {...list} />
-      {roles.data && <NewStaffDialog open={open} onClose={() => setOpen(false)} onDone={list.reload} roles={roles.data.roles} />}
+      {roles.data && <NewStaffDialog open={open} onClose={() => setOpen(false)} onDone={(l) => { setLink(l); list.reload(); }} roles={roles.data.roles} />}
+      {link && <PasswordLinkDialog link={link} onClose={() => setLink(null)} />}
       {managed && roles.data && <AccessDialog user={managed} roles={roles.data.roles} onClose={() => setManaging(null)} onChanged={list.reload} />}
     </>
   );

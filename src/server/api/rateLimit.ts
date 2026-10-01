@@ -79,6 +79,10 @@ export type RatePolicy = { name: string; limit: number; windowMs: number };
 export const RATE_POLICIES = {
   loginPerEmail: { name: "login-email", limit: 10, windowMs: 15 * 60_000 },
   loginPerIp: { name: "login-ip", limit: 50, windowMs: 60_000 },
+  passwordResetPerEmail: { name: "pwreset-email", limit: 5, windowMs: 60 * 60_000 },
+  passwordResetPerIp: { name: "pwreset-ip", limit: 20, windowMs: 15 * 60_000 },
+  passwordCompletePerIp: { name: "pwcomplete-ip", limit: 20, windowMs: 15 * 60_000 },
+  passwordChangePerUser: { name: "pwchange-user", limit: 10, windowMs: 15 * 60_000 },
   webhook: { name: "webhook", limit: 600, windowMs: 60_000 },
   export: { name: "export", limit: 20, windowMs: 60_000 },
   report: { name: "report", limit: 120, windowMs: 60_000 },

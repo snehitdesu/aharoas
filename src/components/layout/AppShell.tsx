@@ -50,6 +50,9 @@ export function AppShell({ shell, nav, unread, children }: { shell: ShellData; n
               <span className="block font-medium text-ink-900">{shell.user.name}</span>
               <span className="block text-xs text-ink-500">{shell.roles.join(", ").toLowerCase()}</span>
             </span>
+            <Link href="/account/password" className="inline-flex h-9 items-center rounded-md px-2.5 text-sm text-ink-700 hover:bg-ink-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-500">
+              Password
+            </Link>
             <LogoutButton />
           </div>
         </header>
