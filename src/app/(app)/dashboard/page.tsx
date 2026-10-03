@@ -2,9 +2,9 @@ import Link from "next/link";
 import { prisma } from "@/server/db/client";
 import { requireShell } from "@/lib/auth/shell";
 import { salesSummary } from "@/server/services/analytics";
-import { listOrders } from "@/server/services/orders";
-import { listKOTs } from "@/server/services/kot";
-import { listReservations } from "@/server/services/reservations";
+import { countOrders } from "@/server/services/orders";
+import { kitchenTicketCounts } from "@/server/services/kot";
+import { countOpenReservations } from "@/server/services/reservations";
 import { listAnomalies } from "@/server/services/anomaly";
 import { listTables } from "@/server/services/masterData";
 import { lowStock } from "@/server/services/inventory";
@@ -49,18 +49,16 @@ export default async function DashboardPage() {
   const has = new Set(shell.permissions);
   const today = businessDayRange(new Date(), outlet.timezone);
 
-  const [sales, orders, kots, reservations, anomalies, tables, stockAlerts] = await Promise.all([
+  const [sales, openOrderCount, kitchen, openBookings, anomalies, tables, stockAlerts] = await Promise.all([
     tile(has.has("reports.view"), () => salesSummary(prisma, ctx, { outletId: outlet.id, from: today.start, to: new Date(today.end.getTime() - 1) })),
-    tile(has.has("order.view"), () => listOrders(prisma, ctx, { outletId: outlet.id, active: true, take: 200 })),
-    tile(has.has("kot.view"), () => listKOTs(prisma, ctx, { outletId: outlet.id })),
-    tile(has.has("reservation.manage"), () => listReservations(prisma, ctx, { outletId: outlet.id, from: today.start, to: today.end, take: 200 })),
+    tile(has.has("order.view"), () => countOrders(prisma, ctx, { outletId: outlet.id, active: true })),
+    tile(has.has("kot.view"), () => kitchenTicketCounts(prisma, ctx, outlet.id)),
+    tile(has.has("reservation.manage"), () => countOpenReservations(prisma, ctx, { outletId: outlet.id, from: today.start, to: today.end })),
     tile(has.has("anomaly.view"), () => listAnomalies(prisma, ctx, { outletId: outlet.id, status: "OPEN", take: 5 })),
     tile(has.has("order.view") || has.has("reservation.manage") || has.has("outlet.manage"), () => listTables(prisma, ctx, outlet.id)),
     tile(has.has("inventory.view"), () => lowStock(prisma, ctx, outlet.id)),
   ]);
 
-  const readyKots = kots?.ok ? kots.value.filter((k) => k.status === "READY").length : 0;
-  const openBookings = reservations?.ok ? reservations.value.items.filter((r) => ["BOOKED", "CONFIRMED", "SEATED"].includes(r.status)).length : 0;
   const availableTables = tables?.ok ? tables.value.filter((t) => t.status === "AVAILABLE").length : 0;
 
   return (
@@ -87,9 +85,9 @@ export default async function DashboardPage() {
 
       <section aria-label="Today" className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         {sales && <Stat emphasis tone="accent" label="Net sales today" value={sales.ok ? formatMoney(sales.value.netSales) : unavailable} hint={sales.ok ? `${sales.value.orders} paid orders · AOV ${formatMoney(sales.value.aov)}` : undefined} />}
-        {orders && <Stat tone="brand" label="Open orders" value={orders.ok ? `${orders.value.items.length}${orders.value.nextCursor ? "+" : ""}` : unavailable} hint="Not yet paid or cancelled" />}
-        {kots && <Stat tone={kots.ok && readyKots > 0 ? "ok" : "brand"} label="Kitchen tickets" value={kots.ok ? kots.value.length : unavailable} hint={kots.ok ? `${readyKots} ready to serve` : undefined} />}
-        {reservations && <Stat tone="neutral" label="Reservations today" value={reservations.ok ? openBookings : unavailable} hint="Booked, confirmed or seated" />}
+        {openOrderCount && <Stat tone="brand" label="Open orders" value={openOrderCount.ok ? openOrderCount.value : unavailable} hint="Not yet paid or cancelled" />}
+        {kitchen && <Stat tone={kitchen.ok && kitchen.value.ready > 0 ? "ok" : "brand"} label="Kitchen tickets" value={kitchen.ok ? kitchen.value.total : unavailable} hint={kitchen.ok ? `${kitchen.value.ready} ready to serve` : undefined} />}
+        {openBookings && <Stat tone="neutral" label="Reservations today" value={openBookings.ok ? openBookings.value : unavailable} hint="Booked, confirmed or seated" />}
       </section>
 
       {(sales || tables || stockAlerts) && (
@@ -120,7 +118,7 @@ export default async function DashboardPage() {
         </section>
       )}
 
-      {!sales && !orders && !kots && !reservations && !anomalies && (
+      {!sales && !openOrderCount && !kitchen && !openBookings && !anomalies && (
         <p className="text-sm text-ink-500">Your role has no dashboard widgets at this outlet. Use the navigation to reach your screens.</p>
       )}
     </div>

@@ -12,7 +12,7 @@ export function PasswordInput({ id, label, value, onChange, autoComplete, hint }
   return (
     <div>
       <label htmlFor={id} className="block text-sm font-medium text-ink-700">{label}</label>
-      <input id={id} type="password" autoComplete={autoComplete} required value={value} onChange={(e) => onChange(e.target.value)} aria-describedby={hint ? `${id}-hint` : undefined} className={inputClass} />
+      <input id={id} name={id} type="password" autoComplete={autoComplete} required value={value} onChange={(e) => onChange(e.target.value)} aria-describedby={hint ? `${id}-hint` : undefined} className={inputClass} />
       {hint && <p id={`${id}-hint`} className="mt-1 text-xs text-ink-500">{hint}</p>}
     </div>
   );

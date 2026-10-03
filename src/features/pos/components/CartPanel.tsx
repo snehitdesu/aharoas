@@ -59,13 +59,13 @@ export function CartPanel({ state, dispatch, tables, running, onPickTable, onPic
           )}
           {canUseCustomers && (
             <Button size="sm" onClick={onPickCustomer} disabled={locked}>
-              <Icon name="user" /> {state.customer ? state.customer.name : "Customer"}
+              <Icon name="user" /> {state.customer?.name ?? running?.customer?.name ?? "Customer"}
             </Button>
           )}
           {state.orderType === "DINE_IN" && (
             <label className="ml-auto flex items-center gap-1.5 text-sm text-ink-700">
               Covers
-              <input type="number" min={1} max={99} value={state.covers} disabled={locked} onChange={(e) => dispatch({ type: "setCovers", covers: Number(e.target.value) })} className="h-8 w-14 rounded border border-ink-300 px-2 text-sm" />
+              <input id="pos-covers" name="covers" type="number" min={1} max={99} value={state.covers} disabled={locked} onChange={(e) => dispatch({ type: "setCovers", covers: Number(e.target.value) })} className="h-8 w-14 rounded border border-ink-300 px-2 text-sm" />
             </label>
           )}
         </div>

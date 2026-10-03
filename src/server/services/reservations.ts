@@ -230,6 +230,20 @@ export async function listReservations(db: PrismaClient, ctx: AccessContext, fil
   return { items, nextCursor: rows.length > take ? items[items.length - 1].id : null };
 }
 
+/** Dashboard KPI: open bookings in a window, without loading reservation rows. */
+export async function countOpenReservations(db: PrismaClient, ctx: AccessContext, filter: { outletId: string; from: Date; to: Date }) {
+  assertOutletAccess(ctx, filter.outletId);
+  assertCan(ctx, "reservation.manage", filter.outletId);
+  return db.reservation.count({
+    where: {
+      organizationId: ctx.organizationId,
+      outletId: filter.outletId,
+      reservedAt: { gte: filter.from, lte: filter.to },
+      status: { in: ACTIVE_RES },
+    },
+  });
+}
+
 // ---------------- Waitlist ----------------
 
 const waitlistSchema = z.object({

@@ -20,20 +20,21 @@ export function SearchInput({ value, onChange, placeholder = "Search…", label 
     return () => clearTimeout(t);
   }, [draft, value, onChange, delay]);
   return (
-    <label className="relative flex min-w-48 flex-1 items-center sm:max-w-xs">
+    <label htmlFor="filter-search" className="relative flex min-w-48 flex-1 items-center sm:max-w-xs">
       <span className="sr-only">{label}</span>
       <Icon name="search" className="pointer-events-none absolute left-2.5 h-4 w-4 text-ink-500" />
-      <Input type="search" value={draft} placeholder={placeholder} onChange={(e) => setDraft(e.target.value)} className="pl-8" maxLength={100} />
+      <Input id="filter-search" name="q" type="search" value={draft} placeholder={placeholder} onChange={(e) => setDraft(e.target.value)} className="pl-8" maxLength={100} />
     </label>
   );
 }
 
 /** Select filter; "" means "any". */
 export function SelectFilter({ label, value, onChange, options, anyLabel = "All" }: { label: string; value: string; onChange: (v: string) => void; options: ReadonlyArray<string | { value: string; label: string }>; anyLabel?: string }) {
+  const id = `filter-${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
   return (
-    <label className="flex flex-col gap-0.5 text-xs text-ink-500">
+    <label htmlFor={id} className="flex flex-col gap-0.5 text-xs text-ink-500">
       <span>{label}</span>
-      <Select value={value} onChange={(e) => onChange(e.target.value)} className="min-w-36">
+      <Select id={id} name={id} value={value} onChange={(e) => onChange(e.target.value)} className="min-w-36">
         <option value="">{anyLabel}</option>
         {options.map((o) => {
           const opt = typeof o === "string" ? { value: o, label: humanize(o) } : o;
@@ -53,11 +54,11 @@ export function DateRangeFilter({ value, onChange }: { value: DateRange; onChang
     <div className="flex items-end gap-2">
       <label className="flex flex-col gap-0.5 text-xs text-ink-500">
         <span>From</span>
-        <Input type="date" value={value.from} max={value.to || undefined} onChange={(e) => onChange({ ...value, from: e.target.value })} aria-invalid={invalid} />
+        <Input id="filter-from" name="from" type="date" value={value.from} max={value.to || undefined} onChange={(e) => onChange({ ...value, from: e.target.value })} aria-invalid={invalid} />
       </label>
       <label className="flex flex-col gap-0.5 text-xs text-ink-500">
         <span>To</span>
-        <Input type="date" value={value.to} min={value.from || undefined} onChange={(e) => onChange({ ...value, to: e.target.value })} aria-invalid={invalid} />
+        <Input id="filter-to" name="to" type="date" value={value.to} min={value.from || undefined} onChange={(e) => onChange({ ...value, to: e.target.value })} aria-invalid={invalid} />
       </label>
     </div>
   );

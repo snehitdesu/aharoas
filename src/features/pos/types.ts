@@ -33,7 +33,7 @@ export type CustomerDTO = { id: string; name: string; phone: string | null; emai
 export type OrderItemDTO = { id: string; name: string; qty: Money; unitPrice: Money; lineTotal: Money; notes: string | null; menuItemId: string | null; modifiers: Array<{ name: string; priceDelta: Money }> };
 export type PaymentDTO = { id: string; method: string; status: string; amount: Money; refunds?: Array<{ amount: Money }> };
 
-/** GET /api/orders/:id */
+/** GET /api/orders/:id — `customer` is the display relation; `customerId` is the FK. */
 export type OrderDTO = {
   id: string;
   outletId: string;
@@ -41,6 +41,7 @@ export type OrderDTO = {
   status: string;
   tableId: string | null;
   customerId: string | null;
+  customer?: CustomerDTO | null;
   covers: number;
   notes: string | null;
   subtotal: Money;

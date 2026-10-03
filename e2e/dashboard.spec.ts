@@ -10,7 +10,7 @@ async function tile(page: Page, label: string): Promise<string> {
 async function expectedCounts(page: Page, outletId: string) {
   const orders = await apiData<{ items: unknown[]; nextCursor: string | null }>(page.request, `/api/orders?outletId=${outletId}&active=true&take=200`);
   const kots = await apiData<unknown[]>(page.request, `/api/kitchen/kots?outletId=${outletId}`);
-  return { orders: `${orders.items.length}${orders.nextCursor ? "+" : ""}`, kots: String(kots.length) };
+  return { orders: String(orders.items.length), kots: String(kots.length) };
 }
 
 test.describe("dashboard", () => {

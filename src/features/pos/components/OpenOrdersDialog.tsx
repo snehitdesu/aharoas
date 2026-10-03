@@ -7,7 +7,7 @@ import { Dialog } from "@/components/ui/Dialog";
 import { Badge } from "@/components/ui/Badge";
 import { LoadingState, ErrorState, EmptyState } from "@/components/ui/States";
 
-type OpenOrder = { id: string; channel: string; status: string; total: string | number; createdAt: string; tableId: string | null };
+type OpenOrder = { id: string; channel: string; status: string; total: string | number; createdAt: string; tableId: string | null; customer?: { name: string } | null };
 
 /** Running orders at the outlet (GET /api/orders?active=true) — reopen to add items or take payment. */
 export function OpenOrdersDialog({ outletId, tableCode, onOpen, onClose }: { outletId: string; tableCode: (id: string | null) => string | null; onOpen: (orderId: string) => void; onClose: () => void }) {
@@ -38,7 +38,7 @@ export function OpenOrdersDialog({ outletId, tableCode, onOpen, onClose }: { out
             <li key={o.id}>
               <button type="button" onClick={() => onOpen(o.id)} className="flex w-full items-center gap-3 px-2 py-2.5 text-left text-sm hover:bg-ink-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-500">
                 <span className="font-mono text-ink-500">#{o.id.slice(-6).toUpperCase()}</span>
-                <span className="font-medium">{o.channel === "DINE_IN" ? `Table ${tableCode(o.tableId) ?? "?"}` : o.channel.replace("_", " ").toLowerCase()}</span>
+                <span className="font-medium">{o.channel === "DINE_IN" ? `Table ${tableCode(o.tableId) ?? "?"}` : o.channel.replace("_", " ").toLowerCase()}{o.customer?.name ? ` · ${o.customer.name}` : ""}</span>
                 <Badge tone="info">{o.status}</Badge>
                 <span className="text-ink-500">{formatElapsed(o.createdAt)} ago</span>
                 <span className="ml-auto font-semibold tabular-nums">{formatMoney(o.total)}</span>

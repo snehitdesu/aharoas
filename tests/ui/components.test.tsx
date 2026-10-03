@@ -70,6 +70,10 @@ function posBackend(overrides: Partial<Record<string, Handler>> = {}): Handler {
     for (const [prefix, h] of Object.entries(overrides)) if (`${c.method} ${c.url}`.startsWith(prefix)) return h!(c);
     if (c.url.startsWith("/api/menu")) return ok([item(), item({ id: "i-idli", name: "Idli", effectivePrice: 60, effectiveSoldOut: true })]);
     if (c.url.startsWith("/api/master/tables")) return ok([]);
+    if (c.method === "GET" && c.url.startsWith("/api/orders?")) return ok({ items: [], nextCursor: null });
+    if (c.method === "GET" && c.url.startsWith("/api/orders/")) {
+      return ok({ id: c.url.replace("/api/orders/", "").split("?")[0], outletId: "out1", channel: "TAKEAWAY", status: "OPEN", tableId: null, customerId: null, customer: null, covers: 1, items: [], total: "126" });
+    }
     if (c.method === "POST" && c.url === "/api/orders") return ok({ id: "cmorder000123", outletId: "out1", channel: "TAKEAWAY", status: "SENT", tableId: null, items: [], total: "126" });
     return { status: 404, error: { code: "NotFound", message: "no mock" } };
   };
@@ -140,6 +144,41 @@ describe("POS", () => {
     handler = () => ({ status: 403, error: { code: "ForbiddenError", message: "Missing permission \"menu.view\"" } });
     renderPos();
     expect(await screen.findByText("Not allowed")).toBeInTheDocument();
+  });
+
+  it("restores a delivery customer after save, close and reopen", async () => {
+    const user = userEvent.setup();
+    const guest = { id: "c-asha", name: "Asha Rao", phone: "9000011111", email: null };
+    const saved = {
+      id: "cmorder-deliv", outletId: "out1", channel: "DELIVERY", status: "OPEN", tableId: null,
+      customerId: guest.id, customer: guest, covers: 1,
+      items: [{ id: "li1", name: "Masala Dosa", qty: "1", unitPrice: "120", lineTotal: "126", notes: null, menuItemId: "i-dosa", modifiers: [] }],
+      total: "126", subtotal: "120", tax: "6", discount: "0",
+    };
+    handler = posBackend({
+      "GET /api/customers": () => ok([guest]),
+      "POST /api/orders": () => ok(saved),
+      "GET /api/orders?": () => ok({ items: [{ ...saved, items: [{ id: "li1", name: "Masala Dosa", qty: "1", lineTotal: "126" }] }], nextCursor: null }),
+      "GET /api/orders/cmorder-deliv": () => ok(saved),
+    });
+    renderPos();
+    const cart = () => screen.getByRole("region", { name: "Current order" });
+    await user.click(await screen.findByRole("radio", { name: "Delivery" }));
+    await user.click(within(cart()).getByRole("button", { name: "Customer" }));
+    const pick = await screen.findByRole("dialog", { name: "Customer" });
+    await user.type(within(pick).getByPlaceholderText("Phone number"), "9000011111");
+    await user.click(within(pick).getByRole("button", { name: "Find" }));
+    await user.click(await within(pick).findByRole("button", { name: /Asha Rao/ }));
+    await expect(within(cart()).getByRole("button", { name: "Asha Rao" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: /Masala Dosa/ }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await expect(await screen.findByRole("button", { name: "Asha Rao" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Close" }));
+    await expect(within(cart()).getByRole("button", { name: "Customer" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Open orders" }));
+    const open = await screen.findByRole("dialog", { name: "Open orders" });
+    await user.click(within(open).getByRole("button", { name: /Asha Rao/ }));
+    await expect(within(cart()).getByRole("button", { name: "Asha Rao" })).toBeVisible();
   });
 });
 

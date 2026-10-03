@@ -16,7 +16,7 @@ import { useMemo, useState } from "react";
 import { api } from "@/lib/api/client";
 import { useQuery } from "@/lib/hooks/useApi";
 import { useShell } from "@/lib/shellContext";
-import { formatDateTime, formatMoney, humanize, isoDay } from "@/lib/format";
+import { formatDateTime, formatElapsed, formatMoney, humanize, isoDay } from "@/lib/format";
 import { TableStatus } from "@/constants/enums";
 import { Button } from "@/components/ui/Button";
 import { Icon } from "@/components/ui/Icon";
@@ -205,7 +205,7 @@ export function TablesScreen() {
                         >
                           <span className="text-sm font-semibold">{t.code}</span>
                           <span className="text-[11px] font-medium uppercase tracking-wide">{humanize(t.status)}</span>
-                          <span className="text-[11px] text-ink-600">{t.capacity} seats{running.length ? ` · ${running.length} order` : ""}</span>
+                          <span className="text-[11px] text-ink-600">{t.capacity} seats{running.length ? ` · ${running.length} order · ${formatElapsed(running[0].createdAt)}` : ""}</span>
                         </button>
                       </li>
                     );

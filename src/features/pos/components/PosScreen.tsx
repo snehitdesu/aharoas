@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { api, ApiError, describeError } from "@/lib/api/client";
-import { cartBlocker, cartFingerprint, cartReducer, emptyCart, toOrderItems, type CartLine, type OrderType } from "@/features/pos/cart";
+import { cartBlocker, cartContextFromOrder, cartFingerprint, cartReducer, emptyCart, toOrderItems, type CartLine } from "@/features/pos/cart";
 import { needsConfiguration } from "@/features/pos/modifiers";
 import { createSubmitGuard } from "@/features/pos/submitGuard";
 import type { MenuItemDTO, OrderDTO, TableDTO } from "@/features/pos/types";
@@ -109,13 +109,21 @@ export function PosScreen({ outletId, perms }: { outletId: string; perms: PosPer
     }
   }
 
+  function restoreCartContext(o: OrderDTO) {
+    const ctx = cartContextFromOrder({
+      channel: o.channel,
+      tableId: o.tableId,
+      covers: o.covers,
+      customer: o.customer ? { id: o.customer.id, name: o.customer.name, phone: o.customer.phone } : null,
+    });
+    dispatch({ type: "restoreContext", ...ctx });
+  }
+
   async function openOrder(orderId: string) {
     setDialog(null);
     try {
       const o = await refreshRunning(orderId);
-      dispatch({ type: "clear" });
-      dispatch({ type: "setOrderType", orderType: (["DINE_IN", "TAKEAWAY", "DELIVERY"].includes(o.channel) ? o.channel : "TAKEAWAY") as OrderType });
-      if (o.tableId) dispatch({ type: "setTable", tableId: o.tableId });
+      restoreCartContext(o);
     } catch (e) {
       toast.show(describeError(e), "bad");
     }
@@ -142,13 +150,15 @@ export function PosScreen({ outletId, perms }: { outletId: string; perms: PosPer
     if (result.status === "busy") return;
     if (result.status === "error") return failure(result.error);
     const order = result.value;
-    dispatch({ type: "clear" });
+    restoreCartContext(order);
     void loadTables();
     toast.show(submit ? `Order #${order.id.slice(-6).toUpperCase()} sent to kitchen` : `Order #${order.id.slice(-6).toUpperCase()} saved`, "ok");
     if (thenPay) setPayingOrderId(order.id);
-    else if (order.tableId) {
-      dispatch({ type: "setTable", tableId: order.tableId });
-      await refreshRunning(order.id).catch(() => undefined);
+    try {
+      restoreCartContext(await refreshRunning(order.id));
+    } catch {
+      restoreCartContext(order);
+      if (!["PAID", "CANCELLED", "REFUNDED"].includes(order.status)) setRunning(order);
     }
   }
 
@@ -283,7 +293,7 @@ export function PosScreen({ outletId, perms }: { outletId: string; perms: PosPer
         >
           <label className="block text-sm">
             Reason (required)
-            <input value={reason} onChange={(e) => setReason(e.target.value)} data-autofocus className="mt-1 h-10 w-full rounded-md border border-ink-300 px-3 text-sm" />
+            <input id="cancel-reason" name="reason" value={reason} onChange={(e) => setReason(e.target.value)} data-autofocus className="mt-1 h-10 w-full rounded-md border border-ink-300 px-3 text-sm" />
           </label>
         </Dialog>
       )}
@@ -291,7 +301,7 @@ export function PosScreen({ outletId, perms }: { outletId: string; perms: PosPer
         <Dialog open onClose={() => setDialog(null)} title="Order discount" size="sm" footer={<Button variant="primary" onClick={applyDiscount} loading={busy === "discount"}>Apply</Button>}>
           <label className="block text-sm">
             Discount amount (₹)
-            <input inputMode="decimal" value={discount} onChange={(e) => setDiscount(e.target.value.replace(/[^\d.]/g, ""))} data-autofocus className="mt-1 h-10 w-full rounded-md border border-ink-300 px-3 text-sm" />
+            <input id="discount-amount" name="discount" inputMode="decimal" value={discount} onChange={(e) => setDiscount(e.target.value.replace(/[^\d.]/g, ""))} data-autofocus className="mt-1 h-10 w-full rounded-md border border-ink-300 px-3 text-sm" />
           </label>
         </Dialog>
       )}

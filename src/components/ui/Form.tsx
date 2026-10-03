@@ -6,7 +6,7 @@
  * server's 422 field errors back onto the fields. Empty optional inputs are
  * sent as `undefined`, never "", so optional schema fields stay unset.
  */
-import { createContext, forwardRef, useCallback, useContext, useState, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from "react";
+import { Children, cloneElement, createContext, forwardRef, isValidElement, useCallback, useContext, useId, useState, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from "react";
 import { ApiError, describeError } from "@/lib/api/client";
 import { Button } from "@/components/ui/Button";
 import { Dialog } from "@/components/ui/Dialog";
@@ -31,9 +31,11 @@ export const Textarea = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<H
 });
 
 export function Checkbox({ label, checked, onChange, disabled, name }: { label: ReactNode; checked: boolean; onChange: (v: boolean) => void; disabled?: boolean; name?: string }) {
+  const autoId = useId();
+  const id = name ?? autoId;
   return (
-    <label className="inline-flex items-center gap-2 text-sm text-ink-700">
-      <input type="checkbox" name={name} className="h-4 w-4 rounded border-ink-300" checked={checked} disabled={disabled} onChange={(e) => onChange(e.target.checked)} />
+    <label htmlFor={id} className="inline-flex items-center gap-2 text-sm text-ink-700">
+      <input id={id} type="checkbox" name={name ?? id} className="h-4 w-4 rounded border-ink-300" checked={checked} disabled={disabled} onChange={(e) => onChange(e.target.checked)} />
       {label}
     </label>
   );
@@ -65,15 +67,35 @@ export function formError(e: unknown): string {
 
 export function Field({ label, name, hint, required, children, className = "" }: { label: ReactNode; name?: string; hint?: ReactNode; required?: boolean; children: ReactNode; className?: string }) {
   const errors = useContext(ErrorsCtx);
+  const generated = useId();
+  const fallbackId = name ?? generated;
   const err = name ? errors[name] : undefined;
+  const describedBy = err ? `${fallbackId}-error` : undefined;
+  const only = Children.toArray(children).filter(isValidElement);
+  const child = only.length === 1 ? only[0] : null;
+  const bindNative = Boolean(child && (child.type === Input || child.type === Select || child.type === Textarea));
+  let controlId = fallbackId;
+  const control = bindNative && child
+    ? (() => {
+        const existing = child.props as { id?: string; name?: string; "aria-invalid"?: boolean; "aria-describedby"?: string; "aria-required"?: boolean };
+        controlId = existing.id ?? fallbackId;
+        return cloneElement(child, {
+          id: controlId,
+          name: existing.name ?? name ?? controlId,
+          "aria-invalid": err ? true : existing["aria-invalid"],
+          "aria-describedby": describedBy ?? existing["aria-describedby"],
+          "aria-required": required ? true : existing["aria-required"],
+        } as never);
+      })()
+    : children;
   return (
-    <label className={`flex flex-col gap-1 text-sm ${className}`}>
+    <label htmlFor={bindNative ? controlId : undefined} className={`flex flex-col gap-1 text-sm ${className}`}>
       <span className="font-medium text-ink-700">
         {label}
         {required && <span aria-hidden className="text-bad-500"> *</span>}
       </span>
-      {children}
-      {err ? <span role="alert" className="text-xs text-bad-500">{err}</span> : hint ? <span className="text-xs text-ink-500">{hint}</span> : null}
+      {control}
+      {err ? <span id={describedBy} role="alert" className="text-xs text-bad-500">{err}</span> : hint ? <span className="text-xs text-ink-500">{hint}</span> : null}
     </label>
   );
 }

@@ -52,7 +52,9 @@ export type CartAction =
   | { type: "setCustomer"; customer: CartCustomer | null }
   | { type: "setCovers"; covers: number }
   | { type: "setNotes"; notes: string }
-  | { type: "clear" };
+  | { type: "clear" }
+  /** Restore type/table/customer/covers from a saved order (clears draft lines). */
+  | { type: "restoreContext"; orderType: OrderType; tableId: string | null; covers: number; customer: CartCustomer | null };
 
 /** Lines with the same item, variant, modifiers and note are the same line (quantities merge). */
 export function lineKey(l: Pick<CartLine, "menuItemId" | "variantId" | "modifierOptionIds" | "notes">): string {
@@ -112,7 +114,32 @@ export function cartReducer(state: CartState, action: CartAction): CartState {
       return { ...state, notes: action.notes.slice(0, 500) };
     case "clear":
       return emptyCart(state.orderType);
+    case "restoreContext":
+      return {
+        ...emptyCart(action.orderType),
+        tableId: action.orderType === "DINE_IN" ? action.tableId : null,
+        covers: Math.max(1, Math.min(99, Math.floor(action.covers) || 1)),
+        customer: action.customer,
+      };
   }
+}
+
+const POS_CHANNELS: OrderType[] = ["DINE_IN", "TAKEAWAY", "DELIVERY"];
+
+/** Cart context (not lines) from a persisted order so reopen shows the same customer/table/type. */
+export function cartContextFromOrder(order: {
+  channel: string;
+  tableId: string | null;
+  covers?: number | null;
+  customer?: CartCustomer | null;
+}): { orderType: OrderType; tableId: string | null; covers: number; customer: CartCustomer | null } {
+  const orderType = POS_CHANNELS.includes(order.channel as OrderType) ? (order.channel as OrderType) : "TAKEAWAY";
+  return {
+    orderType,
+    tableId: orderType === "DINE_IN" ? order.tableId : null,
+    covers: order.covers && order.covers > 0 ? order.covers : 1,
+    customer: order.customer ?? null,
+  };
 }
 
 export const cartItemCount = (s: CartState) => s.lines.reduce((n, l) => n + l.qty, 0);

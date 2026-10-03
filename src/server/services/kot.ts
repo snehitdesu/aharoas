@@ -84,6 +84,24 @@ export async function updateKOTStatus(ctx: AccessContext, kotId: string, to: KOT
   });
 }
 
+/** Dashboard KPI: live ticket total + ready count without loading ticket payloads. */
+export async function kitchenTicketCounts(db: PrismaClient, ctx: AccessContext, outletId: string) {
+  assertOutletAccess(ctx, outletId);
+  assertCan(ctx, "kot.view", outletId);
+  const rows = await db.kot.groupBy({
+    by: ["status"],
+    where: { organizationId: ctx.organizationId, outletId, status: { in: ["NEW", "ACCEPTED", "PREPARING", "READY"] } },
+    _count: { _all: true },
+  });
+  let total = 0;
+  let ready = 0;
+  for (const r of rows) {
+    total += r._count._all;
+    if (r.status === "READY") ready = r._count._all;
+  }
+  return { total, ready };
+}
+
 /** Active tickets for a station/outlet (KDS board), oldest first. */
 export async function listKOTs(db: PrismaClient, ctx: AccessContext, filter: { outletId: string; stationId?: string; status?: KOTStatus[] }) {
   assertOutletAccess(ctx, filter.outletId);

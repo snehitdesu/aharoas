@@ -347,10 +347,12 @@ export function cancelOrder(ctx: AccessContext, orderId: string, reason: string,
 // Queries
 // ------------------------------------------------------------
 
+const customerSelect = { select: { id: true, name: true, phone: true, email: true } } as const;
+
 export async function getOrder(db: PrismaClient, ctx: AccessContext, orderId: string) {
   const order = await db.order.findUnique({
     where: { id: orderId },
-    include: { items: { include: { modifiers: true } }, payments: { include: { refunds: true } }, kots: { include: { items: true } } },
+    include: { customer: customerSelect, items: { include: { modifiers: true } }, payments: { include: { refunds: true } }, kots: { include: { items: true } } },
   });
   if (!order || order.organizationId !== ctx.organizationId) throw new NotFoundError("Order not found");
   assertOutletAccess(ctx, order.outletId);
@@ -383,7 +385,7 @@ export async function listOrders(db: PrismaClient, ctx: AccessContext, input: z.
     },
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     take: f.take + 1,
-    include: { items: { select: { id: true, name: true, qty: true, lineTotal: true } } },
+    include: { customer: customerSelect, items: { select: { id: true, name: true, qty: true, lineTotal: true } } },
     ...(f.cursor ? { cursor: { id: f.cursor }, skip: 1 } : {}),
   });
   const items = rows.slice(0, f.take);
@@ -401,7 +403,21 @@ const placeSchema = createOrderSchema.extend({
 });
 export type PlaceOrderInput = z.input<typeof placeSchema>;
 
-const placedInclude = { items: { include: { modifiers: true } }, kots: { select: { id: true, number: true, status: true } } } as const;
+const placedInclude = { customer: customerSelect, items: { include: { modifiers: true } }, kots: { select: { id: true, number: true, status: true } } } as const;
+
+/** Count of orders at an outlet (dashboard KPI). Same auth as listOrders; no item payload. */
+export async function countOrders(db: PrismaClient, ctx: AccessContext, input: { outletId: string; active?: boolean }) {
+  const f = listSchema.pick({ outletId: true, active: true }).parse(input);
+  assertOutletAccess(ctx, f.outletId);
+  assertCan(ctx, "order.view", f.outletId);
+  return db.order.count({
+    where: {
+      organizationId: ctx.organizationId,
+      outletId: f.outletId,
+      ...(f.active ? { status: { notIn: ["PAID", "CANCELLED", "REFUNDED"] } } : {}),
+    },
+  });
+}
 
 /**
  * POS entry point: create an order with all its lines (and optionally send it

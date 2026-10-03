@@ -20,6 +20,7 @@ import { resolveFromToken, type CurrentUser } from "@/server/auth/current-user";
 import { type AccessContext, ForbiddenError, NotFoundError, UnauthorizedError, ValidationError } from "@/server/db/scope";
 import { ok, fail } from "@/server/api/respond";
 import { enforceRateLimit, type RatePolicy } from "@/server/api/rateLimit";
+import { applyTimingHeaders, logSlowRequest, newRequestId } from "@/server/observability/timing";
 
 type Method = "GET" | "POST" | "PATCH" | "DELETE";
 export type HandlerArgs = { ctx: AccessContext; user: CurrentUser; params: Record<string, string>; query: Record<string, string>; body: unknown; req: NextRequest };
@@ -66,22 +67,38 @@ export function assertSameOrigin(req: NextRequest) {
 export function createRouter(routes: Route[]) {
   const compiled = routes.map((r) => ({ ...r, segs: r.path.split("/").filter(Boolean) }));
   const dispatch = (method: Method) => async (req: NextRequest, context: { params: Promise<{ path?: string[] }> }) => {
+    const started = performance.now();
+    const requestId = newRequestId(req.headers.get("x-request-id"));
+    const path = req.nextUrl.pathname;
+    let userId: string | undefined;
+    let status = 500;
     try {
       const segs = (await context.params).path ?? [];
       const candidates = compiled.map((r) => ({ r, params: match(segs, r.segs) })).filter((c) => c.params);
       if (!candidates.length) throw new NotFoundError("Unknown endpoint");
       const hit = candidates.find((c) => c.r.method === method);
-      if (!hit) return NextResponse.json({ ok: false, error: { code: "MethodNotAllowed", message: `${method} not allowed` } }, { status: 405, headers: { Allow: [...new Set(candidates.map((c) => c.r.method))].join(", ") } });
+      if (!hit) {
+        status = 405;
+        const res = NextResponse.json({ ok: false, error: { code: "MethodNotAllowed", message: `${method} not allowed` } }, { status: 405, headers: { Allow: [...new Set(candidates.map((c) => c.r.method))].join(", ") } });
+        applyTimingHeaders(res.headers, requestId, performance.now() - started);
+        return res;
+      }
 
       const current = await resolveFromToken(req.cookies.get(SESSION_COOKIE)?.value);
       if (!current) throw new UnauthorizedError();
+      userId = current.user.id;
       if (hit.r.rateLimit) await enforceRateLimit(hit.r.rateLimit, current.user.id);
 
       let body: unknown = undefined;
       if (method !== "GET") {
         assertSameOrigin(req);
         const text = await req.text();
-        if (text.length > MAX_BODY) return NextResponse.json({ ok: false, error: { code: "PayloadTooLarge", message: "Payload too large" } }, { status: 413 });
+        if (text.length > MAX_BODY) {
+          status = 413;
+          const res = NextResponse.json({ ok: false, error: { code: "PayloadTooLarge", message: "Payload too large" } }, { status: 413 });
+          applyTimingHeaders(res.headers, requestId, performance.now() - started);
+          return res;
+        }
         if (text) {
           try {
             body = JSON.parse(text);
@@ -92,10 +109,25 @@ export function createRouter(routes: Route[]) {
       }
       const query = Object.fromEntries(req.nextUrl.searchParams.entries());
       const result = await hit.r.handler({ ctx: current.ctx, user: current.user, params: hit.params!, query, body: body ?? {}, req });
-      if (result instanceof Response) return result;
-      return ok(result);
+      const durationMs = performance.now() - started;
+      if (result instanceof Response) {
+        status = result.status;
+        applyTimingHeaders(result.headers, requestId, durationMs);
+        logSlowRequest({ requestId, method, path, status, durationMs, userId });
+        return result;
+      }
+      status = 200;
+      const res = ok(result);
+      applyTimingHeaders(res.headers, requestId, durationMs);
+      logSlowRequest({ requestId, method, path, status, durationMs, userId });
+      return res;
     } catch (e) {
-      return fail(e);
+      const res = fail(e);
+      status = res.status;
+      const durationMs = performance.now() - started;
+      applyTimingHeaders(res.headers, requestId, durationMs);
+      logSlowRequest({ requestId, method, path, status, durationMs, userId });
+      return res;
     }
   };
   return { GET: dispatch("GET"), POST: dispatch("POST"), PATCH: dispatch("PATCH"), DELETE: dispatch("DELETE") };

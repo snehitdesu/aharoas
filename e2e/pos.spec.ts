@@ -270,6 +270,43 @@ test.describe("customer", () => {
     expect(o.customerId).toBe(customers.body!.data[0].id);
   });
 
+  test("DELIVERY customer name survives save, close, reopen and refresh", async ({ page }) => {
+    await openPos(page);
+    await page.getByRole("radio", { name: "Delivery" }).click();
+    await posCart(page).getByRole("button", { name: "Customer" }).click();
+    const pick = page.getByRole("dialog", { name: "Customer" });
+    await pick.getByPlaceholder("Phone number").fill("9999900001");
+    await pick.getByRole("button", { name: "Find" }).click();
+    await pick.getByRole("button", { name: /E2E Guest/ }).click();
+    await expect(posCart(page).getByRole("button", { name: "E2E Guest" })).toBeVisible();
+    await addSimpleItem(page, "Cola");
+
+    const created = page.waitForResponse((r) => isOrderCreate(r.request()));
+    await page.getByRole("button", { name: "Save" }).click();
+    const id = ((await (await created).json()) as { data: { id: string } }).data.id;
+    const saved = await order(page.request, id);
+    expect(saved.customerId).toBeTruthy();
+    expect(saved.customer?.name).toBe("E2E Guest");
+    await expect(posCart(page).getByRole("button", { name: "E2E Guest" })).toBeVisible();
+
+    await page.getByRole("button", { name: "Close" }).click();
+    await expect(posCart(page).getByRole("button", { name: "Customer" })).toBeVisible();
+
+    await page.getByRole("button", { name: "Open orders" }).click();
+    const open = page.getByRole("dialog", { name: "Open orders" });
+    await open.getByRole("button", { name: new RegExp(`#${id.slice(-6).toUpperCase()}.*E2E Guest`) }).click();
+    await expect(posCart(page).getByRole("button", { name: "E2E Guest" })).toBeVisible();
+
+    await page.reload();
+    await expect(page.getByRole("button", { name: /Chicken Biryani/ })).toBeVisible();
+    await page.getByRole("button", { name: "Open orders" }).click();
+    await page.getByRole("dialog", { name: "Open orders" }).getByRole("button", { name: new RegExp(`#${id.slice(-6).toUpperCase()}.*E2E Guest`) }).click();
+    await expect(posCart(page).getByRole("button", { name: "E2E Guest" })).toBeVisible();
+    const again = await order(page.request, id);
+    expect(again.customer?.name).toBe("E2E Guest");
+    expect(again.customerId).toBe(saved.customerId);
+  });
+
   test("CUSTOMER invalid input and create-new flow", async ({ page }) => {
     await openPos(page);
     await page.getByRole("radio", { name: "Takeaway" }).click();

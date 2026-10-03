@@ -6,10 +6,13 @@ import { ok, fail } from "@/server/api/respond";
 import { assertSameOrigin } from "@/server/api/router";
 import { clientIp, enforceRateLimit, RATE_POLICIES } from "@/server/api/rateLimit";
 import { ValidationError } from "@/server/db/scope";
+import { applyTimingHeaders, logSlowRequest, newRequestId } from "@/server/observability/timing";
 
 export const runtime = "nodejs";
 
 export async function POST(req: NextRequest) {
+  const started = performance.now();
+  const requestId = newRequestId(req.headers.get("x-request-id"));
   try {
     assertSameOrigin(req);
     const text = await req.text();
@@ -24,8 +27,16 @@ export async function POST(req: NextRequest) {
     const userAgent = req.headers.get("user-agent") ?? undefined;
     const { session, user } = await loginWithPassword(prisma, body as never, { ip, userAgent });
     await setSessionCookie(session.token, session.expiresAt);
-    return ok({ user, expiresAt: session.expiresAt });
+    const res = ok({ user, expiresAt: session.expiresAt });
+    const durationMs = performance.now() - started;
+    applyTimingHeaders(res.headers, requestId, durationMs);
+    logSlowRequest({ requestId, method: "POST", path: "/api/auth/login", status: 200, durationMs, userId: user.id });
+    return res;
   } catch (e) {
-    return fail(e);
+    const res = fail(e);
+    const durationMs = performance.now() - started;
+    applyTimingHeaders(res.headers, requestId, durationMs);
+    logSlowRequest({ requestId, method: "POST", path: "/api/auth/login", status: res.status, durationMs });
+    return res;
   }
 }

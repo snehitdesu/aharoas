@@ -6,10 +6,11 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { prisma } from "@/server/db/client";
 import { systemContext } from "@/server/auth/context";
 import { type AccessContext, ConflictError, ValidationError } from "@/server/db/scope";
-import { placeOrder, listOrders } from "@/server/services/orders";
+import { placeOrder, listOrders, getOrder, countOrders } from "@/server/services/orders";
 import { createPayment, verifyPayment } from "@/server/services/payment";
 import { listKOTs, listStations } from "@/server/services/kot";
 import { createMenuItem, createModifierGroup, addModifierOption, attachModifierGroup } from "@/server/services/menu";
+import { createCustomer } from "@/server/services/crm";
 
 const RUN = Date.now().toString(36);
 let orgId: string, outletId: string, tableId: string, dosa: string, pizza: string, spice: string, ctx: AccessContext, captain: AccessContext;
@@ -57,6 +58,19 @@ describe("placeOrder", () => {
   it("lists running orders for a table", async () => {
     const { items } = await listOrders(prisma, captain, { outletId, tableId, active: "true" as never });
     expect(items).toHaveLength(1);
+  });
+
+  it("persists a delivery customer and returns the name on get and list", async () => {
+    const guest = await createCustomer(ctx, { name: "Asha Rao", phone: `91${RUN.replace(/\D/g, "0").slice(-8).padStart(8, "0")}` });
+    const order = await placeOrder(captain, { outletId, channel: "DELIVERY", customerId: guest.id, items: [{ menuItemId: dosa, qty: 1 }] });
+    expect(order.customerId).toBe(guest.id);
+    expect(order.customer?.name).toBe("Asha Rao");
+    const got = await getOrder(prisma, captain, order.id);
+    expect(got.customer?.name).toBe("Asha Rao");
+    expect(got.customerId).toBe(guest.id);
+    const listed = await listOrders(prisma, captain, { outletId, active: true });
+    expect(listed.items.find((o) => o.id === order.id)?.customer?.name).toBe("Asha Rao");
+    expect(await countOrders(prisma, captain, { outletId, active: true })).toBeGreaterThanOrEqual(1);
   });
 });
 

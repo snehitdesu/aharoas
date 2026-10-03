@@ -3,7 +3,7 @@
  * submit guard, payment math, KDS lifecycle, navigation, formatting.
  */
 import { describe, it, expect } from "vitest";
-import { cartReducer, emptyCart, cartBlocker, toOrderItems, cartFingerprint, lineKey, type CartLine } from "@/features/pos/cart";
+import { cartReducer, emptyCart, cartBlocker, toOrderItems, cartFingerprint, cartContextFromOrder, lineKey, type CartLine } from "@/features/pos/cart";
 import { toggleOption, validateSelection, summarizeSelection, needsConfiguration, activeGroups, groupRule } from "@/features/pos/modifiers";
 import { estimateTotals } from "@/features/pos/estimate";
 import { createSubmitGuard } from "@/features/pos/submitGuard";
@@ -68,6 +68,24 @@ describe("cart", () => {
     s = cartReducer(s, { type: "setOrderType", orderType: "DELIVERY" });
     expect(cartBlocker(s)).toBe("Attach a customer for delivery");
     expect(cartReducer(s, { type: "clear" }).orderType).toBe("DELIVERY");
+  });
+
+  it("restoreContext hydrates customer, type and table from a saved order", () => {
+    const delivery = cartContextFromOrder({
+      channel: "DELIVERY",
+      tableId: "t-ignored",
+      covers: 3,
+      customer: { id: "c1", name: "Asha", phone: "900" },
+    });
+    expect(delivery).toEqual({ orderType: "DELIVERY", tableId: null, covers: 3, customer: { id: "c1", name: "Asha", phone: "900" } });
+    let s = cartReducer(emptyCart("DINE_IN"), { type: "add", line: line() });
+    s = cartReducer(s, { type: "restoreContext", ...delivery });
+    expect(s.lines).toHaveLength(0);
+    expect(s.orderType).toBe("DELIVERY");
+    expect(s.customer?.name).toBe("Asha");
+    const dine = cartContextFromOrder({ channel: "DINE_IN", tableId: "t1", covers: 2, customer: null });
+    expect(dine.tableId).toBe("t1");
+    expect(cartContextFromOrder({ channel: "TAKEAWAY", tableId: null, customer: null }).customer).toBeNull();
   });
 });
 

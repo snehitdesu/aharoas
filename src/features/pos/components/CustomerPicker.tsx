@@ -53,7 +53,7 @@ export function CustomerPicker({ current, canCreate, onSelect, onClose }: { curr
         <div className="flex gap-2">
           <label className="flex-1">
             <span className="sr-only">Phone</span>
-            <input value={phone} onChange={(e) => setPhone(e.target.value)} inputMode="tel" placeholder="Phone number" data-autofocus className="h-10 w-full rounded-md border border-ink-300 px-3 text-sm" />
+            <input id="customer-phone" name="phone" value={phone} onChange={(e) => setPhone(e.target.value)} inputMode="tel" placeholder="Phone number" data-autofocus className="h-10 w-full rounded-md border border-ink-300 px-3 text-sm" />
           </label>
           <Button type="submit" loading={busy && !name}>Find</Button>
         </div>
@@ -75,7 +75,7 @@ export function CustomerPicker({ current, canCreate, onSelect, onClose }: { curr
               <p className="text-sm text-ink-700">No customer with this number. Add them?</p>
               <label className="block text-sm">
                 Name
-                <input value={name} onChange={(e) => setName(e.target.value)} className="mt-1 h-10 w-full rounded-md border border-ink-300 px-3 text-sm" />
+                <input id="customer-name" name="name" value={name} onChange={(e) => setName(e.target.value)} className="mt-1 h-10 w-full rounded-md border border-ink-300 px-3 text-sm" />
               </label>
               <Button variant="primary" onClick={create} disabled={!name.trim()} loading={busy}>Add customer</Button>
             </div>

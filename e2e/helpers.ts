@@ -43,7 +43,7 @@ export async function outletByCode(req: APIRequestContext, code: string): Promis
   return o!;
 }
 
-export type OrderDTO = { id: string; status: string; channel: string; tableId: string | null; customerId: string | null; total: string; items: Array<{ id: string; name: string; qty: string; lineTotal: string; modifiers: Array<{ name: string }> }>; payments?: Array<{ id: string; method: string; status: string; amount: string }>; kots?: Array<{ id: string; number: number; status: string }> };
+export type OrderDTO = { id: string; status: string; channel: string; tableId: string | null; customerId: string | null; customer?: { id: string; name: string; phone: string | null } | null; total: string; items: Array<{ id: string; name: string; qty: string; lineTotal: string; modifiers: Array<{ name: string }> }>; payments?: Array<{ id: string; method: string; status: string; amount: string }>; kots?: Array<{ id: string; number: number; status: string }> };
 
 export async function activeOrderForTable(req: APIRequestContext, outletId: string, tableId: string) {
   const { items } = await apiData<{ items: Array<{ id: string }> }>(req, `/api/orders?outletId=${outletId}&tableId=${tableId}&active=true&take=10`);
