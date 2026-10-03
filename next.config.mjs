@@ -1,17 +1,13 @@
-/** @type {import('next').NextConfig} */
-const securityHeaders = [
-  { key: "X-Content-Type-Options", value: "nosniff" },
-  { key: "X-Frame-Options", value: "DENY" },
-  { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
-  { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=()" },
-  // Conservative CSP: restricts framing, <base>, plugins and form targets only.
-  // A script/style CSP needs nonces for Next.js hydration (and dev uses eval), so
-  // it is deliberately not set here — add it with the frontend (nonce middleware).
-  { key: "Content-Security-Policy", value: "frame-ancestors 'none'; base-uri 'self'; object-src 'none'; form-action 'self'" },
-  ...(process.env.NODE_ENV === "production" ? [{ key: "Strict-Transport-Security", value: "max-age=31536000; includeSubDomains" }] : []),
-];
+import { securityHeaders as buildSecurityHeaders } from "./src/server/config/securityHeaders.mjs";
 
+// Development keeps 'unsafe-eval' + ws: (HMR) in the CSP; production adds HSTS.
+const securityHeaders = buildSecurityHeaders({ dev: process.env.NODE_ENV !== "production" });
+
+/** @type {import('next').NextConfig} */
 const nextConfig = {
+  // The desktop build (npm run desktop:build) packages the self-contained server
+  // that `output: "standalone"` produces; `next start` / the web build are unchanged.
+  ...(process.env.AHAROS_STANDALONE === "1" ? { output: "standalone" } : {}),
   reactStrictMode: true,
   poweredByHeader: false,
   eslint: {

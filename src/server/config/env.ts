@@ -62,6 +62,15 @@ export function validateProductionEnv(env: NodeJS.ProcessEnv = process.env): voi
     }
   }
 
+  // --- Background exports (optional; defaults: background runner, 168 h retention) ---
+  if (env.EXPORT_RUNNER !== undefined && env.EXPORT_RUNNER !== "" && !["background", "inline"].includes(env.EXPORT_RUNNER.toLowerCase())) {
+    problems.push('EXPORT_RUNNER must be "background" or "inline"');
+  }
+  if (env.EXPORT_RETENTION_HOURS !== undefined && env.EXPORT_RETENTION_HOURS !== "") {
+    const h = Number(env.EXPORT_RETENTION_HOURS);
+    if (!Number.isInteger(h) || h <= 0) problems.push("EXPORT_RETENTION_HOURS must be a positive integer");
+  }
+
   if (problems.length > 0) {
     // Names + reasons only — never a secret's value.
     throw new EnvValidationError(`Invalid production environment configuration:\n- ${problems.join("\n- ")}`);

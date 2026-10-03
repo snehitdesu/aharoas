@@ -1562,16 +1562,20 @@ model ExportJob {
   outletId       String?
   kind           String // report id: DAILY_SALES | ITEM_SALES | INVENTORY | PNL | ...
   format         String    @default("CSV")
-  status         String    @default("PENDING") // PENDING | RUNNING | SUCCESS | FAILED
-  filePath       String? // null: CSV is streamed back in the response, not stored
+  status         String    @default("PENDING") // PENDING | RUNNING | SUCCESS | FAILED | EXPIRED (EXPORT_TRANSITIONS)
+  filePath       String? // opaque storage key "<orgId>/<jobId>.csv" (never a filesystem path, never sent to clients); null = inline CSV / purged
   params         String? // JSON of the validated filters (no secrets)
   rowCount       Int?
-  error          String?
+  error          String? // safe, user-facing message only (internal errors are logged, not stored)
   requestedById  String?
   createdAt      DateTime  @default(now())
-  finishedAt     DateTime?
+  startedAt      DateTime? // claimed by a runner (PENDING -> RUNNING)
+  finishedAt     DateTime? // SUCCESS / FAILED
+  expiresAt      DateTime? // stored file is removed after this (EXPORT_RETENTION_HOURS)
+  purgedAt       DateTime? // SUCCESS -> EXPIRED by retention cleanup
 
   @@index([organizationId, kind])
+  @@index([status, createdAt])
 }
 
 model Anomaly {

@@ -46,7 +46,9 @@ data-isolated.
 | `tests/domain/reservation-concurrency.test.ts` | slot locks: 5 concurrent bookings → exactly 1 |
 | `tests/domain/outlet-menu.test.ts` | per-outlet price / offered / sold-out |
 | `tests/domain/master-data.test.ts` | units, materials, vendors, outlets, tables + procurement/stock document reads |
-| `tests/domain/export-jobs.test.ts` | background exports: lifecycle, re-authorization, single execution, storage safety |
+| `tests/domain/export-jobs.test.ts`, `export-security.test.ts` | background exports through the default runner: lifecycle, re-authorization, single execution, storage safety, download re-check |
+| `tests/domain/export-lifecycle.test.ts` | transitions, revoked/deactivated/tampered at run time, two-worker race, ORDERS CSV end to end, IDOR / cross-org / traversal / non-SUCCESS / expired downloads, no storage keys in API, audit trail, retention, restart recovery |
+| `tests/config/security-headers.test.ts` | production vs development headers + CSP, served by next.config |
 | `tests/e2e/guest-journey.test.ts` | customer → reservation → table → order → kitchen → payment → loyalty, with failure paths |
 | `tests/domain/admin-queries.test.ts` | back-office reads/admin commands: org, departments, floors, conversions, modifier groups, role matrix, lists — auth, isolation, paging |
 | `tests/domain/backoffice-support.test.ts` | backend additions for the menu / recipe / master-data screens: `updateModifierGroup` (+ `PATCH /api/menu/modifier-groups/:id`), recipe reads with resolved names (KITCHEN reads without master.view), recipe search + version summary, named cost lines, `getMaterial.stockMoved`, `RECIPE_VERSION_TRANSITIONS` ↔ service, case-insensitive search (materials / vendors / customers / recipes — PostgreSQL `LIKE` is case-sensitive) |
@@ -96,3 +98,20 @@ The E2E database is only ever modified through the app, except `e2eDb()` in
 Test data is created through the real services. Exceptions: master data with
 no admin service yet (units, materials, vendors, tables) is inserted directly,
 and one export test injects a simulated DB fault to exercise the FAILED path.
+
+## Desktop app (Phase 7)
+
+| Command | What it runs |
+|---|---|
+| `npx vitest run tests/desktop` | migrator (schema identical to `prisma migrate deploy`, history accepted by `prisma migrate status`, refusals: unmanaged DB / newer-version migration / changed checksum / failed migration rolled back), SQL splitter, verified backups + rotation, shell policy (navigation, IPC validation, child env), `config.json` |
+| `npm run desktop:build && npm run desktop:e2e` | Playwright drives the real Electron app (unpacked build) on a fresh data directory |
+| `AHAROS_DESKTOP_EXE=dist-desktop/win-unpacked/Aharos.exe npm run desktop:e2e` | the same suite against the packaged (or an installed) `Aharos.exe` |
+
+`desktop/e2e/desktop.spec.ts` (5 tests): first-run wizard (IPC junk rejected,
+password policy enforced, local DB initialized, secret DPAPI-protected) → login →
+POS order → KOT → KDS Accept/Start/Ready/Served → cash payment → back-office pages;
+renderer isolation (no Node globals, external requests and navigation blocked,
+`localhost` pinned to 127.0.0.1, validated IPC, mock printer reports `simulated`);
+RBAC through the shell (cashier refused audit/inventory/staff/menu writes, logout
+revokes); restart (session + data persist, automatic verified backup, startup timings).
+Set `AHAROS_KEEP_E2E_DATA=1` to keep the temporary data directory for inspection.

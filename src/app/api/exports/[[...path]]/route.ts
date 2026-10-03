@@ -3,7 +3,7 @@ import { prisma } from "@/server/db/client";
 import { createRouter, listQuery } from "@/server/api/router";
 import { exportReportCSV, listExportJobs } from "@/server/services/reports";
 import { RATE_POLICIES } from "@/server/api/rateLimit";
-import { requestExport, getExportJob, downloadExport } from "@/server/services/exportJobs";
+import { requestExport, getExportJob, downloadExport, toExportJobDTO } from "@/server/services/exportJobs";
 
 export const runtime = "nodejs";
 
@@ -18,14 +18,17 @@ const csvResponse = (csv: string, filename: string, headers: Record<string, stri
 // GET  /api/exports/:id                      -> job status
 // GET  /api/exports/:id/download             -> stored CSV (re-authorized)
 export const { GET, POST } = createRouter([
-  { method: "GET", path: "", handler: ({ ctx, query }) => listExportJobs(prisma, ctx, listQuery.parse(query)) },
+  { method: "GET", path: "", handler: async ({ ctx, query }) => {
+    const page = await listExportJobs(prisma, ctx, listQuery.parse(query));
+    return { ...page, items: page.items.map((j) => toExportJobDTO(j)) }; // never expose storage keys
+  } },
   {
     method: "POST",
     path: "",
     rateLimit: RATE_POLICIES.export,
     handler: async ({ ctx, body }) => {
       const { report, filters, mode } = exportBody.parse(body);
-      if (mode === "background") return requestExport(ctx, report, filters);
+      if (mode === "background") return toExportJobDTO(await requestExport(ctx, report, filters));
       const res = await exportReportCSV(ctx, report, filters);
       return new Response(res.csv, {
         status: 200,
@@ -40,7 +43,7 @@ export const { GET, POST } = createRouter([
       });
     },
   },
-  { method: "GET", path: ":id", handler: ({ ctx, params }) => getExportJob(prisma, ctx, params.id) },
+  { method: "GET", path: ":id", handler: async ({ ctx, params }) => toExportJobDTO(await getExportJob(prisma, ctx, params.id)) },
   {
     method: "GET", path: ":id/download", rateLimit: RATE_POLICIES.export,
     handler: async ({ ctx, params }) => {

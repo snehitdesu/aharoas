@@ -272,8 +272,18 @@ export const AuditAction = makeEnum([
   "PASSWORD_SET",
   "PASSWORD_RESET_REQUEST",
   "PASSWORD_CHANGE",
+  // background export lifecycle ("EXPORT" = export completed)
+  "EXPORT_REQUESTED",
+  "EXPORT_STARTED",
+  "EXPORT_FAILED",
+  "EXPORT_DENIED",
+  "EXPORT_DOWNLOADED",
+  "EXPORT_PURGED",
 ] as const);
 export type AuditAction = (typeof AuditAction.values)[number];
+
+export const ExportStatus = makeEnum(["PENDING", "RUNNING", "SUCCESS", "FAILED", "EXPIRED"] as const);
+export type ExportStatus = (typeof ExportStatus.values)[number];
 
 export const IntegrationKind = makeEnum(["POS", "PAYMENT", "AGGREGATOR", "SHEETS", "WHATSAPP", "EMAIL"] as const);
 export type IntegrationKind = (typeof IntegrationKind.values)[number];
@@ -292,6 +302,15 @@ export const ORDER_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
   PAID: ["REFUNDED"],
   CANCELLED: [],
   REFUNDED: [],
+};
+
+/** Only PENDING -> RUNNING claims a job; EXPIRED = retention removed the stored file. */
+export const EXPORT_TRANSITIONS: Record<ExportStatus, ExportStatus[]> = {
+  PENDING: ["RUNNING"],
+  RUNNING: ["SUCCESS", "FAILED"],
+  SUCCESS: ["EXPIRED"],
+  FAILED: [],
+  EXPIRED: [],
 };
 
 export const PURCHASE_ORDER_TRANSITIONS: Record<PurchaseOrderStatus, PurchaseOrderStatus[]> = {

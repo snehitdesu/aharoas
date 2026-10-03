@@ -54,8 +54,8 @@ All additive or data-preserving; no historical timestamps rewritten.
 | Webhooks | POS, payment (captured / failed / refund.processed / unknown→ignored), aggregator; retry-safe |
 | Anomalies, notifications, analytics | Per-outlet timezone bucketing in SQL |
 | Reports (14) + CSV | Registry, row caps, pagination; date-only filters = outlet business days |
-| Export jobs | Inline CSV **and** background jobs: PENDING→RUNNING→SUCCESS/FAILED with conditional transitions, run-time re-authorization, single execution, safe local storage |
-| Security hardening | Rate limiting (login per email + IP, webhooks, reports, exports); Origin checks on all state-changing routes incl. login/logout; body caps; baseline security headers + conservative CSP; serializable transactions with retry |
+| Export jobs | Inline CSV **and** background jobs on an in-process runner (not in the request): PENDING→RUNNING→SUCCESS/FAILED(→EXPIRED) via `EXPORT_TRANSITIONS`, run-time re-authorization, single execution, startup recovery, retention cleanup, full audit trail, opaque ids (`docs/exports.md`) |
+| Security hardening | Rate limiting (login per email + IP, webhooks, reports, exports); Origin checks on all state-changing routes incl. login/logout; body caps; security headers + same-origin CSP (env-aware; `docs/exports.md`); serializable transactions with retry |
 
 ### 🟡 PARTIAL
 | Item | What is missing |
@@ -80,8 +80,8 @@ Petpooja, Razorpay, Zomato/Swiggy partner APIs, email/WhatsApp. **No real provid
 - ⚠️ Provider switch + committed PostgreSQL migration history (`/prisma/postgres/` is git-ignored), explicit `@db.Decimal` precision — deployment steps (docs/production-readiness.md M3).
 
 ### ❌ NOT IMPLEMENTED
-- Shared (Redis) rate-limit store; queue-based export worker (the `ExportRunner` interface is the integration point; only the inline runner exists).
-- Full script/style CSP (needs nonce middleware with the frontend).
+- Shared (Redis) rate-limit store; out-of-process export worker for multi-instance deployments (`ExportRunner` is the integration point; an in-process background runner and an inline runner exist).
+- Nonce-based script CSP (removes `'unsafe-inline'`; needs nonce middleware on every route).
 - Customer addresses service; department admin; aggregator admin API.
 
 ### 🔮 FUTURE (schema capabilities deliberately not added)
@@ -132,7 +132,7 @@ Frontend limitations: KDS uses polling (no push transport); adding a round to an
 
 Catalog limitations (this pass): the menu endpoint returns the whole org menu (≤ 1000 items) in one response, so item search / status filtering and paging are client-side and the item detail reads that list (no single-item endpoint); variant and modifier-option **names** cannot be changed and nothing in the menu can be deleted (deactivate instead) — the services only support price / active updates; recipes cannot be renamed or deactivated (no service); optional material / vendor / menu-item fields (category, email, POS code…) can be changed but not cleared (the service schemas are optional, not nullable); material categories and unit conversions have no edit / delete service; the plate-cost card uses the menu price, not the outlet override price (as `menuItemCostAndMargin` does); a table's QR token is shown as text (no QR image rendering or guest QR-ordering page).
 
-Back-office limitations: list date filters on DateTime columns use the browser's day bounds (reports / finance / closing use outlet business days server-side); segment and feedback summaries are per loaded page; the aggregator reconciliation run needs an aggregator admin API (not built); export job rows expose the stored `filePath` (server path) from the existing API.
+Back-office limitations: list date filters on DateTime columns use the browser's day bounds (reports / finance / closing use outlet business days server-side); segment and feedback summaries are per loaded page; the aggregator reconciliation run needs an aggregator admin API (not built).
 
 ## Production verification & hardening (2026-10-01)
 

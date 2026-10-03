@@ -2,7 +2,7 @@
   "name": "aharos",
   "version": "0.1.0",
   "private": true,
-  "description": "Aharos \u2014 Restaurant Operating System",
+  "description": "Aharos — Restaurant Operating System",
   "scripts": {
     "dev": "next dev",
     "build": "prisma generate && next build",
@@ -22,7 +22,12 @@
     "db:pg:schema": "node scripts/pg-schema.mjs",
     "test:pg": "node scripts/pg-schema.mjs && prisma generate --schema prisma/postgres/schema.prisma && vitest run",
     "e2e": "npm run build && playwright test",
-    "e2e:test": "playwright test"
+    "e2e:test": "playwright test",
+    "desktop:build": "node desktop/scripts/build.mjs",
+    "desktop:start": "electron build/desktop/app",
+    "desktop:pack": "node desktop/scripts/build.mjs && electron-builder --dir",
+    "desktop:dist": "node desktop/scripts/build.mjs && electron-builder --win",
+    "desktop:e2e": "playwright test -c playwright.desktop.config.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
@@ -47,6 +52,9 @@
     "@types/react": "^19.0.4",
     "@types/react-dom": "^19.0.2",
     "autoprefixer": "^10.4.20",
+    "electron": "44.5.1",
+    "electron-builder": "26.15.3",
+    "esbuild": "0.28.2",
     "eslint": "^8.57.1",
     "eslint-config-next": "15.5.27",
     "jsdom": "^25.0.1",

@@ -64,7 +64,7 @@ Small production-security gaps from the audit, now closed at the application lay
 | Shared rate-limit store (Redis) + object storage for exports | Prerequisite for >1 instance. |
 | Validation-before-authorization ordering | Services Zod-parse input before `assertCan`, so an unauthorized caller with a malformed body gets 422 (schema details) instead of 403. No data read or written. Low. |
 | Idle session timeout / session rotation | Sessions are 7-day absolute (`SESSION_TTL_SECONDS`), revoked on logout and deactivation; no idle timeout. |
-| Script/style CSP with nonces | Current CSP restricts framing, base, objects, form targets only. |
+| Script CSP with nonces | CSP restricts all sources to same-origin (see `docs/exports.md`), but `script-src` still allows `'unsafe-inline'` for Next.js hydration. |
 | Structured logging + request ids, error monitoring (Sentry or similar), uptime alerts | Today: `console.error` for 5xx only. The mock notifier logs recipients (PII) to stdout **in dev/test only** (it is refused in production unless explicitly opted in). Prisma logs handled unique-constraint conflicts as errors (noise). |
 | `npm audit` leftovers | `postcss` (Next's pinned build-time copy; needs attacker-controlled CSS at build time) and `deepmerge-ts` via the Prisma CLI (deploy-time). Not reachable at runtime; revisit on the next Next/Prisma upgrade. |
 | `next lint` → ESLint CLI | Deprecated in Next 16. |

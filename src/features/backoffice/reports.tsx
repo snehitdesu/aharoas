@@ -23,7 +23,7 @@ import { useToast } from "@/components/ui/Toast";
 
 export type ReportMeta = { id: string; title: string; permission: string; maxRows: number; aggregate: boolean; columns: Array<{ key: string; header: string }> };
 type ReportResult = { report: string; title: string; columns: Array<{ key: string; header: string }>; rows: Array<Record<string, unknown>>; rowCount: number; truncated: boolean; offset: number; nextOffset: number | null };
-type ExportJob = { id: string; kind: string; status: string; outletId: string | null; rowCount: number | null; error: string | null; filePath: string | null; createdAt: string; finishedAt: string | null };
+type ExportJob = { id: string; kind: string; status: string; outletId: string | null; rowCount: number | null; error: string | null; downloadable: boolean; createdAt: string; finishedAt: string | null; expiresAt: string | null };
 
 const PAGE = 200;
 const MONEY_KEYS = /amount|sales|total|value|cost|revenue|paid|due|spend|profit|margin|refund|discount|tax/i;
@@ -134,7 +134,7 @@ export function ExportsScreen() {
       <PageHeader title="Exports" subtitle="CSV export jobs (yours; org-wide roles see all)" actions={<Button onClick={list.reload} aria-label="Refresh exports"><Icon name="refresh" /> Refresh</Button>} />
       <FormAlert message={err} />
       {pending && <Card className="mb-3"><p className="text-sm text-ink-700">Some exports are still running — refresh to update their status.</p></Card>}
-      <FilterBar><SelectFilter label="Status" value={status} onChange={setStatus} options={["PENDING", "RUNNING", "SUCCESS", "FAILED"]} /></FilterBar>
+      <FilterBar><SelectFilter label="Status" value={status} onChange={setStatus} options={["PENDING", "RUNNING", "SUCCESS", "FAILED", "EXPIRED"]} /></FilterBar>
       <DataTable label="Export jobs" rows={rows} rowKey={(j) => j.id} loading={list.loading} error={list.error} onRetry={list.reload} empty="No exports yet — run one from Reports"
         columns={[
           { key: "c", header: "Requested", cell: (j) => formatDateTime(j.createdAt) },
@@ -143,7 +143,7 @@ export function ExportsScreen() {
           { key: "s", header: "Status", cell: (j) => <StatusBadge status={j.status} /> },
           { key: "r", header: "Rows", numeric: true, cell: (j) => j.rowCount ?? "—" },
           { key: "f", header: "Finished", cell: (j) => formatDateTime(j.finishedAt) },
-          { key: "e", header: "", cell: (j) => (j.status === "SUCCESS" && j.filePath ? <Button size="sm" onClick={() => download(j)} loading={downloading === j.id}><Icon name="download" /> Download</Button> : j.status === "FAILED" ? <span className="text-xs text-bad-500">{j.error ?? "Failed"}</span> : j.status === "SUCCESS" ? <span className="text-xs text-ink-500">Downloaded inline</span> : null) },
+          { key: "e", header: "", cell: (j) => (j.downloadable ? <Button size="sm" onClick={() => download(j)} loading={downloading === j.id}><Icon name="download" /> Download</Button> : j.status === "FAILED" ? <span className="text-xs text-bad-500">{j.error ?? "Failed"}</span> : j.status === "EXPIRED" ? <span className="text-xs text-ink-500">Expired</span> : j.status === "SUCCESS" ? <span className="text-xs text-ink-500">Downloaded inline</span> : null) },
         ]} />
       <Pager {...list} />
     </>

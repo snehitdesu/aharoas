@@ -18,7 +18,7 @@
  */
 import type { PrismaClient } from "@prisma/client";
 import { z } from "zod";
-import { InventoryTransactionType, PaymentMethod, PaymentStatus } from "@/constants/enums";
+import { InventoryTransactionType, OrderChannel, OrderStatus, PaymentMethod, PaymentStatus } from "@/constants/enums";
 import { prisma } from "@/server/db/client";
 import { type AccessContext, assertOutletAccess, NotFoundError, ValidationError } from "@/server/db/scope";
 import { assertCan, type Permission } from "@/server/auth/rbac";
@@ -122,6 +122,30 @@ export const REPORTS: Record<string, AnyReport> = {
     schema: baseFilter.refine(rangeOk, RANGE_MSG),
     run: async ({ db, ctx, f, ...w }) => windowed(await categorySales(db, ctx, f), w),
   })([{ key: "category", header: "Category", value: (r) => r.category }, { key: "qty", header: "Qty", value: (r) => r.qty }, { key: "revenue", header: "Revenue", value: (r) => r.revenue }]),
+
+  ORDERS: define({
+    id: "ORDERS", title: "Orders (sales)", permission: "reports.view", maxRows: 10000, aggregate: false,
+    schema: baseFilter.extend({ status: OrderStatus.zod.optional(), channel: OrderChannel.zod.optional() }).refine(rangeOk, RANGE_MSG),
+    run: async ({ db, ctx, f, limit, offset }) => {
+      const ids = authorizedOutletIds(ctx, { outletId: f.outletId });
+      if (!ids.length) return [];
+      const rows = await db.order.findMany({
+        where: { organizationId: ctx.organizationId, outletId: { in: ids }, ...(dateRange(f) ? { createdAt: dateRange(f) } : {}), ...(f.status ? { status: f.status } : {}), ...(f.channel ? { channel: f.channel } : {}) },
+        include: { table: { select: { code: true } }, customer: { select: { name: true } } },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+        skip: offset,
+        take: limit + 1,
+      });
+      const codes = await outletCodes(db, ctx, ids);
+      return rows.map((r) => ({ ...r, outlet: codes.get(r.outletId) }));
+    },
+  })([
+      { key: "date", header: "Date", value: (r) => r.createdAt }, { key: "outlet", header: "Outlet", value: (r) => r.outlet }, { key: "orderId", header: "Order", value: (r) => r.id },
+      { key: "invoiceNo", header: "Invoice", value: (r) => r.invoiceNo }, { key: "channel", header: "Channel", value: (r) => r.channel }, { key: "source", header: "Source", value: (r) => r.source },
+      { key: "status", header: "Status", value: (r) => r.status }, { key: "table", header: "Table", value: (r) => r.table?.code }, { key: "customer", header: "Customer", value: (r) => r.customer?.name },
+      { key: "covers", header: "Covers", value: (r) => r.covers }, { key: "subtotal", header: "Subtotal", value: (r) => num(r.subtotal) }, { key: "discount", header: "Discount", value: (r) => num(r.discount) },
+      { key: "tax", header: "Tax", value: (r) => num(r.tax) }, { key: "total", header: "Total", value: (r) => num(r.total) }, { key: "paidAt", header: "Paid", value: (r) => r.paidAt },
+    ]),
 
   INVENTORY: define({
     id: "INVENTORY", title: "Inventory on hand", permission: "inventory.view", maxRows: 10000, aggregate: true,

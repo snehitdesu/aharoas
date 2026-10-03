@@ -41,3 +41,7 @@ npm-debug.log*
 /*.db
 /*.db-journal
 *.tsbuildinfo
+
+# desktop build output (npm run desktop:build / desktop:dist)
+/dist-desktop/
+/e2e/.results-desktop/

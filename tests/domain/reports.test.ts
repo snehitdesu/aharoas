@@ -115,7 +115,7 @@ describe("dailySales()", () => {
 
 describe("report registry", () => {
   it("registers every required report", () => {
-    expect(REPORT_IDS.sort()).toEqual(["CATEGORY_SALES", "CUSTOMERS", "DAILY_SALES", "EXPENSES", "INVENTORY", "ITEM_SALES", "LOYALTY", "PAYMENTS", "PNL", "PURCHASES", "REFUNDS", "STOCK_MOVEMENT", "VENDOR_DUES", "WASTAGE"]);
+    expect(REPORT_IDS.sort()).toEqual(["CATEGORY_SALES", "CUSTOMERS", "DAILY_SALES", "EXPENSES", "INVENTORY", "ITEM_SALES", "LOYALTY", "ORDERS", "PAYMENTS", "PNL", "PURCHASES", "REFUNDS", "STOCK_MOVEMENT", "VENDOR_DUES", "WASTAGE"]);
   });
 
   it("returns columns in order and rows keyed by column", async () => {

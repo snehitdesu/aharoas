@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'">
+<title>Set up Aharos</title>
+<link rel="stylesheet" href="desktop.css">
+<script src="setup.js" defer></script>
+</head>
+<body class="setup">
+<main>
+  <header>
+    <img src="icon.png" alt="" width="40" height="40">
+    <div>
+      <h1>Welcome to Aharos</h1>
+      <p class="muted">Let's set up this restaurant computer. It takes about a minute.</p>
+    </div>
+  </header>
+
+  <ol class="steps" aria-label="Setup steps">
+    <li data-step="1" class="active">Restaurant</li>
+    <li data-step="2">Owner account</li>
+    <li data-step="3">Ready</li>
+  </ol>
+
+  <section id="step-0" class="panel">
+    <h2>How will this computer be used?</h2>
+    <div class="choices">
+      <button type="button" class="choice" id="choose-new">
+        <strong>Set up a new restaurant</strong>
+        <span>Create your organization, first outlet and Owner account on this computer.</span>
+      </button>
+      <button type="button" class="choice" disabled aria-disabled="true">
+        <strong>Connect to an existing Aharos</strong>
+        <span>Join another Aharos computer or cloud account. Coming in a later version.</span>
+      </button>
+    </div>
+  </section>
+
+  <form id="form" novalidate hidden>
+    <section id="step-1" class="panel">
+      <h2>Restaurant</h2>
+      <label>Organization name<input name="organizationName" autocomplete="organization" maxlength="120" required placeholder="e.g. Spice Route Hospitality"></label>
+      <div class="row">
+        <label>Outlet name<input name="outletName" maxlength="120" required placeholder="e.g. Indiranagar"></label>
+        <label>Outlet code<input name="outletCode" maxlength="20" required placeholder="e.g. BLR01" class="upper"></label>
+      </div>
+      <div class="row">
+        <label>Time zone<input name="timezone" maxlength="64" required></label>
+        <label>Currency<input name="currency" maxlength="3" required class="upper"></label>
+      </div>
+      <div class="actions">
+        <button type="button" class="secondary" id="back-1">Back</button>
+        <button type="button" id="next-1">Continue</button>
+      </div>
+    </section>
+
+    <section id="step-2" class="panel" hidden>
+      <h2>Owner account</h2>
+      <p class="muted">The Owner can add staff, set permissions and restore backups.</p>
+      <label>Full name<input name="ownerName" autocomplete="name" maxlength="120" required></label>
+      <label>Email<input name="ownerEmail" type="email" autocomplete="username" maxlength="200" required></label>
+      <div class="row">
+        <label>Password<input name="ownerPassword" type="password" autocomplete="new-password" required></label>
+        <label>Repeat password<input name="confirmPassword" type="password" autocomplete="new-password" required></label>
+      </div>
+      <p class="hint">At least 10 characters, with letters plus a number or symbol.</p>
+      <div class="actions">
+        <button type="button" class="secondary" id="back-2">Back</button>
+        <button type="submit" id="create">Create restaurant</button>
+      </div>
+    </section>
+  </form>
+
+  <section id="step-3" class="panel" hidden>
+    <h2>Aharos is ready</h2>
+    <p>Your restaurant has been created on this computer. Sign in with <strong id="owner-email"></strong>.</p>
+    <div class="actions"><button type="button" id="finish">Open Aharos</button></div>
+  </section>
+
+  <p id="error" class="error" role="alert" hidden></p>
+  <footer class="muted" id="version"></footer>
+</main>
+</body>
+</html>

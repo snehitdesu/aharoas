@@ -14,7 +14,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { prisma } from "@/server/db/client";
 import { buildAccessContext, systemContext } from "@/server/auth/context";
 import { type AccessContext, ForbiddenError, NotFoundError } from "@/server/db/scope";
-import { requestExport, getExportJob, downloadExport } from "@/server/services/exportJobs";
+import { requestExport, getExportJob, downloadExport, getBackgroundExportRunner } from "@/server/services/exportJobs";
 import { createExpense } from "@/server/services/finance";
 
 const RUN = Date.now().toString(36);
@@ -40,9 +40,17 @@ beforeAll(async () => {
 
 afterAll(async () => { await prisma.$disconnect(); });
 
+/** Request through the default background runner and wait for it deterministically (runner idle hook). */
+async function exported(ctx: AccessContext, filters: Record<string, unknown>) {
+  const queued = await requestExport(ctx, "EXPENSES", filters);
+  expect(queued.status).toBe("PENDING");
+  await getBackgroundExportRunner().idle();
+  return prisma.exportJob.findUniqueOrThrow({ where: { id: queued.id } });
+}
+
 describe("export download authorization re-check", () => {
   it("authorized caller can download their own successful export", async () => {
-    const job = await requestExport(mgr, "EXPENSES", { outletId: outletA });
+    const job = await exported(mgr, { outletId: outletA });
     expect(job.status).toBe("SUCCESS");
     const file = await downloadExport(prisma, mgr, job.id);
     expect(file.rowCount).toBe(1);
@@ -50,7 +58,7 @@ describe("export download authorization re-check", () => {
   });
 
   it("re-authorizes at download: access lost after a successful export blocks download + status (ownership is not enough)", async () => {
-    const job = await requestExport(mgr, "EXPENSES", { outletId: outletA });
+    const job = await exported(mgr, { outletId: outletA });
     expect(job.status).toBe("SUCCESS");
 
     // Downgrade to a role that can no longer export; rebuild the context as a
@@ -70,7 +78,7 @@ describe("export download authorization re-check", () => {
   });
 
   it("another organization can never download or see the export", async () => {
-    const job = await requestExport(mgr, "EXPENSES", { outletId: outletA });
+    const job = await exported(mgr, { outletId: outletA });
     await expect(getExportJob(prisma, foreignOrg, job.id)).rejects.toBeInstanceOf(NotFoundError);
     await expect(downloadExport(prisma, foreignOrg, job.id)).rejects.toBeInstanceOf(NotFoundError);
   });

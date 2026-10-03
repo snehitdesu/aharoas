@@ -8,7 +8,7 @@ import path from "node:path";
 import { prisma } from "@/server/db/client";
 import { buildAccessContext, systemContext } from "@/server/auth/context";
 import { type AccessContext, ForbiddenError, NotFoundError, ValidationError } from "@/server/db/scope";
-import { requestExport, processExportJob, getExportJob, downloadExport, LocalExportStorage, type ExportRunner } from "@/server/services/exportJobs";
+import { requestExport, processExportJob, getExportJob, downloadExport, LocalExportStorage, getBackgroundExportRunner, type ExportRunner } from "@/server/services/exportJobs";
 import { exportReportCSV } from "@/server/services/reports";
 import { createExpense } from "@/server/services/finance";
 
@@ -20,6 +20,12 @@ let mgrA: AccessContext, mgrA2: AccessContext, cashierA: AccessContext, owner: A
 class DeferredRunner implements ExportRunner {
   jobs: string[] = [];
   async enqueue(jobId: string) { this.jobs.push(jobId); }
+}
+
+/** Wait for the (default) background runner to finish, then read the job's final state. No sleeps. */
+async function settled(job: { id: string }) {
+  await getBackgroundExportRunner().idle();
+  return prisma.exportJob.findUniqueOrThrow({ where: { id: job.id } });
 }
 
 async function user(tag: string, role: string, outletId: string | null) {
@@ -46,7 +52,9 @@ afterAll(async () => { await prisma.$disconnect(); });
 
 describe("background exports", () => {
   it("runs PENDING -> RUNNING -> SUCCESS, stores the CSV and audits once", async () => {
-    const job = await requestExport(mgrA, "EXPENSES", { outletId: outletA });
+    const queued = await requestExport(mgrA, "EXPENSES", { outletId: outletA });
+    expect(queued.status).toBe("PENDING"); // the request does not run the export
+    const job = await settled(queued);
     expect(job).toMatchObject({ status: "SUCCESS", rowCount: 3, kind: "EXPENSES", outletId: outletA, requestedById: mgrAId, error: null });
     expect(job.filePath).toBe(`${orgId}/${job.id}.csv`);
     const file = await downloadExport(prisma, mgrA, job.id);
@@ -68,7 +76,7 @@ describe("background exports", () => {
     expect(await prisma.auditLog.count({ where: { entityType: "ExportJob", entityId: job.id, action: "EXPORT" } })).toBe(1);
   });
 
-  it("re-authorizes at run time: access lost after the request => FAILED, no data, no audit", async () => {
+  it("re-authorizes at run time: access lost after the request => FAILED, no data, EXPORT_DENIED audit only", async () => {
     const runner = new DeferredRunner();
     const job = await requestExport(mgrA, "EXPENSES", { outletId: outletA }, { runner });
     await prisma.membership.update({ where: { id: membershipId }, data: { active: false } });
@@ -80,15 +88,18 @@ describe("background exports", () => {
     const after = await prisma.exportJob.findUniqueOrThrow({ where: { id: job.id } });
     expect(after).toMatchObject({ status: "FAILED", filePath: null, rowCount: null });
     expect(after.error).toMatch(/permission|access/i);
-    expect(await prisma.auditLog.count({ where: { entityType: "ExportJob", entityId: job.id } })).toBe(0);
+    // The denial is audited; nothing that implies data was produced is.
+    const actions = (await prisma.auditLog.findMany({ where: { entityType: "ExportJob", entityId: job.id }, orderBy: { createdAt: "asc" } })).map((a) => a.action);
+    expect(actions).toEqual(["EXPORT_REQUESTED", "EXPORT_STARTED", "EXPORT_DENIED"]);
+    expect(actions).not.toContain("EXPORT");
     await expect(downloadExport(prisma, mgrA, job.id)).rejects.toBeInstanceOf(ValidationError);
   });
 
   it("preserves row limits and filters", async () => {
-    const job = await requestExport(mgrA, "EXPENSES", { outletId: outletA, limit: 2 });
+    const job = await settled(await requestExport(mgrA, "EXPENSES", { outletId: outletA, limit: 2 }));
     expect(job.rowCount).toBe(2);
     expect(JSON.parse(job.params!)).toMatchObject({ outletId: outletA, limit: 2 });
-    const filtered = await requestExport(mgrA, "EXPENSES", { outletId: outletA, category: "GAS" });
+    const filtered = await settled(await requestExport(mgrA, "EXPENSES", { outletId: outletA, category: "GAS" }));
     expect(filtered.rowCount).toBe(1);
   });
 
@@ -99,7 +110,7 @@ describe("background exports", () => {
     await expect(requestExport(mgrA, "NOPE", {})).rejects.toBeInstanceOf(NotFoundError);
     expect(await prisma.exportJob.count({ where: { organizationId: orgId } })).toBe(before);
 
-    const job = await requestExport(mgrA, "EXPENSES", { outletId: outletA });
+    const job = await settled(await requestExport(mgrA, "EXPENSES", { outletId: outletA }));
     await expect(getExportJob(prisma, mgrA2, job.id)).rejects.toBeInstanceOf(ForbiddenError); // another manager's export
     expect((await getExportJob(prisma, owner, job.id)).id).toBe(job.id); // org-wide may see it
     await expect(downloadExport(prisma, org2, job.id)).rejects.toBeInstanceOf(NotFoundError);
@@ -111,5 +122,8 @@ describe("background exports", () => {
     await expect(storage.put("a/../../b.csv", "x")).rejects.toBeInstanceOf(ValidationError);
     await storage.put("org1/job1.csv", "ok");
     expect(await storage.get("org1/job1.csv")).toBe("ok");
+    await storage.delete("org1/job1.csv");
+    await storage.delete("org1/job1.csv"); // idempotent
+    await expect(storage.get("org1/job1.csv")).rejects.toThrow();
   });
 });

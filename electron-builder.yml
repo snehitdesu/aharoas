@@ -1,0 +1,41 @@
+# Windows installer for the Aharos desktop app. Run `npm run desktop:dist`
+# (builds the payload with desktop/scripts/build.mjs first).
+appId: com.aharos.desktop
+productName: Aharos
+copyright: Copyright © Aharos
+electronVersion: 44.5.1
+directories:
+  app: build/desktop/app
+  output: dist-desktop
+  buildResources: build/desktop/resources
+asar: true
+# The app package has no runtime dependencies (main/preloads are bundled). Without
+# this, electron-builder walks up to the repo root and packs its node_modules.
+files:
+  - "**/*"
+  - "!node_modules{,/**/*}"
+# The production server (build/desktop/server) is copied to resources/server by the
+# afterPack hook: it runs from plain files (Prisma's native engine cannot load from
+# asar) and electron-builder's extraResources drops node_modules directories.
+afterPack: desktop/scripts/after-pack.cjs
+win:
+  executableName: Aharos
+  icon: build/desktop/resources/icon.ico
+  target:
+    - target: nsis
+      arch: [x64]
+    - target: portable
+      arch: [x64]
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: always
+  createStartMenuShortcut: true
+  shortcutName: Aharos
+  runAfterFinish: true
+  # Restaurant data lives in %APPDATA%\Aharos and must survive uninstall/upgrade.
+  deleteAppDataOnUninstall: false
+  artifactName: Aharos-Setup-${version}.${ext}
+portable:
+  artifactName: Aharos-Portable-${version}.${ext}
