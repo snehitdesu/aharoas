@@ -16,5 +16,5 @@ export const { POST } = createRouter([
     },
   },
   { method: "POST", path: ":id/verify", handler: ({ ctx, params, body }) => verifyPayment(ctx, params.id, z.object({ providerRef: z.string().optional() }).parse(body)) },
-  { method: "POST", path: ":id/refund", handler: ({ ctx, params, body }) => refundPayment(ctx, params.id, body as never) },
+  { method: "POST", path: ":id/refund", reauth: "payment.refund", handler: ({ ctx, params, body }) => refundPayment(ctx, params.id, body as never) },
 ]);

@@ -3,7 +3,8 @@ import { prisma } from "@/server/db/client";
 import { createRouter, listQuery, outletQuery } from "@/server/api/router";
 import { assertOutletAccess } from "@/server/db/scope";
 import { assertCan } from "@/server/auth/rbac";
-import { stockByOutlet, lowStock, stockMovement } from "@/server/services/inventory";
+import { stockByOutlet, lowStock, stockMovement, recordOpeningStock, adjustStock } from "@/server/services/inventory";
+import { listUnmappedSales, resolveUnmappedSale } from "@/server/services/unmapped";
 import { createWastage, postWastage, cancelWastage, listWastage } from "@/server/services/wastage";
 import { createProductionBatch, startProductionBatch, completeProductionBatch, cancelProductionBatch, listProductionBatches } from "@/server/services/production";
 import {
@@ -21,7 +22,9 @@ const status = z.object({ status: z.string().optional() });
 const dispatchBody = z.object({ lines: z.array(z.object({ lineId: z.string(), dispatchedQty: z.number().nonnegative() })).optional() });
 const receiveBody = z.object({ lines: z.array(z.object({ lineId: z.string(), receivedQty: z.number().nonnegative(), damagedQty: z.number().nonnegative().optional() })).optional() });
 const countStart = z.object({ materialIds: z.array(z.string()).optional() });
-const countEntries = z.object({ entries: z.array(z.object({ materialId: z.string(), physicalQty: z.number().nonnegative() })).min(1) });
+const countEntries = z.object({ entries: z.array(z.object({ materialId: z.string(), physicalQty: z.number().nonnegative(), unitId: z.string().optional() })).min(1) });
+/** Idempotency-Key header: a retried create returns the original document. */
+const idemKey = (req: { headers: Headers }) => req.headers.get("idempotency-key") ?? undefined;
 
 /** Read helpers in inventory.ts do not authorize themselves; the route does. */
 function canViewInventory(ctx: Parameters<typeof assertCan>[0], outletId: string) {
@@ -63,10 +66,16 @@ export const { GET, POST } = createRouter([
     },
   },
   { method: "GET", path: "ledger", handler: ({ ctx, query }) => listLedger(prisma, ctx, query as never) },
+  // ---- opening stock / manual adjustments ----
+  { method: "POST", path: "opening-stock", handler: ({ ctx, body }) => recordOpeningStock(ctx, body as never) },
+  { method: "POST", path: "adjustments", handler: ({ ctx, body, req }) => adjustStock(ctx, body as never, idemKey(req)) },
+  // ---- unmapped-sale queue ----
+  { method: "GET", path: "unmapped", handler: ({ ctx, query }) => listUnmappedSales(prisma, ctx, query as never) },
+  { method: "POST", path: "unmapped/:id/resolve", handler: ({ ctx, params, body }) => resolveUnmappedSale(ctx, params.id, body as never) },
   // ---- wastage documents ----
   { method: "GET", path: "wastage", handler: ({ ctx, query }) => listWastage(prisma, ctx, { ...listQuery.extend({ outletId: z.string() }).parse(query), ...status.parse(query) } as never) },
   { method: "GET", path: "wastage/:id", handler: ({ ctx, params }) => getWastage(prisma, ctx, params.id) },
-  { method: "POST", path: "wastage", handler: ({ ctx, body }) => createWastage(ctx, body as never) },
+  { method: "POST", path: "wastage", handler: ({ ctx, body, req }) => createWastage(ctx, body as never, undefined, idemKey(req)) },
   { method: "POST", path: "wastage/:id/post", handler: ({ ctx, params }) => postWastage(ctx, params.id) },
   { method: "POST", path: "wastage/:id/cancel", handler: ({ ctx, params }) => cancelWastage(ctx, params.id) },
   // ---- production ----
@@ -79,14 +88,14 @@ export const { GET, POST } = createRouter([
   // ---- transfers ----
   { method: "GET", path: "transfers", handler: ({ ctx, query }) => listTransfers(prisma, ctx, query) },
   { method: "GET", path: "transfers/:id", handler: ({ ctx, params }) => getTransfer(prisma, ctx, params.id) },
-  { method: "POST", path: "transfers", handler: ({ ctx, body }) => createTransfer(ctx, body as never) },
+  { method: "POST", path: "transfers", handler: ({ ctx, body, req }) => createTransfer(ctx, body as never, undefined, idemKey(req)) },
   { method: "POST", path: "transfers/:id/dispatch", handler: ({ ctx, params, body }) => dispatchTransfer(ctx, params.id, dispatchBody.parse(body).lines) },
   { method: "POST", path: "transfers/:id/receive", handler: ({ ctx, params, body }) => receiveTransfer(ctx, params.id, receiveBody.parse(body).lines) },
   { method: "POST", path: "transfers/:id/cancel", handler: ({ ctx, params }) => cancelTransfer(ctx, params.id) },
   // ---- issues ----
   { method: "GET", path: "issues", handler: ({ ctx, query }) => listIssues(prisma, ctx, query) },
   { method: "GET", path: "issues/:id", handler: ({ ctx, params }) => getIssue(prisma, ctx, params.id) },
-  { method: "POST", path: "issues", handler: ({ ctx, body }) => createIssue(ctx, body as never) },
+  { method: "POST", path: "issues", handler: ({ ctx, body, req }) => createIssue(ctx, body as never, undefined, idemKey(req)) },
   { method: "POST", path: "issues/:id/post", handler: ({ ctx, params }) => postIssue(ctx, params.id) },
   { method: "POST", path: "issues/:id/cancel", handler: ({ ctx, params }) => cancelIssue(ctx, params.id) },
   // ---- stock counts ----

@@ -10,7 +10,7 @@ import { ToastProvider } from "@/components/ui/Toast";
 import type { ShellData } from "@/lib/auth/shell";
 import type { Permission } from "@/server/auth/rbac";
 
-export type Call = { url: string; path: string; query: URLSearchParams; method: string; body: any };
+export type Call = { url: string; path: string; query: URLSearchParams; method: string; body: any; headers: Record<string, string> };
 export type Routes = Record<string, (c: Call) => unknown>;
 
 export const state: { calls: Call[]; routes: Routes } = { calls: [], routes: {} };
@@ -22,7 +22,7 @@ export function installFetch() {
   state.calls = [];
   vi.stubGlobal("fetch", vi.fn(async (url: string, init: RequestInit = {}) => {
     const u = new URL(url, "http://localhost");
-    const c: Call = { url, path: u.pathname, query: u.searchParams, method: init.method ?? "GET", body: init.body ? JSON.parse(init.body as string) : undefined };
+    const c: Call = { url, path: u.pathname, query: u.searchParams, method: init.method ?? "GET", body: init.body ? JSON.parse(init.body as string) : undefined, headers: (init.headers ?? {}) as Record<string, string> };
     state.calls.push(c);
     const h = state.routes[`${c.method} ${c.path}`];
     if (!h) return new Response(JSON.stringify({ ok: false, error: { code: "NotFoundError", message: `no mock for ${c.method} ${c.path}` } }), { status: 404 });

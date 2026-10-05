@@ -386,7 +386,8 @@ export async function runVendorPaymentReconciliation(ctx: AccessContext, opts: R
   const { end } = await outletBusinessDay(db, ctx, opts.outletId, opts.businessDate);
   const bills = await db.purchaseBill.findMany({
     where: { organizationId: ctx.organizationId, outletId: opts.outletId, createdAt: { lt: end } },
-    select: { id: true, number: true, status: true, total: true, paidAmount: true, payments: { select: { amount: true } } },
+    // Reversed payments no longer count against a bill.
+    select: { id: true, number: true, status: true, total: true, paidAmount: true, payments: { where: { reversedAt: null }, select: { amount: true } } },
   });
   const lines: ReconLineInput[] = [];
   for (const b of bills) {
@@ -395,7 +396,7 @@ export async function runVendorPaymentReconciliation(ctx: AccessContext, opts: R
     else if (!paid.eq(D(b.paidAmount))) lines.push({ method: `bill:${b.number}`, expected: num(paid), actual: num(b.paidAmount), note: "MISMATCHED:paidAmount differs from payments" });
     else if (paid.gt(D(b.total))) lines.push({ method: `bill:${b.number}`, expected: num(b.total), actual: num(paid), note: "MISMATCHED:overpaid" });
   }
-  const payments = await db.vendorPayment.findMany({ where: { organizationId: ctx.organizationId, outletId: opts.outletId, createdAt: { lt: end } }, orderBy: { createdAt: "asc" } });
+  const payments = await db.vendorPayment.findMany({ where: { organizationId: ctx.organizationId, outletId: opts.outletId, createdAt: { lt: end }, reversedAt: null }, orderBy: { createdAt: "asc" } });
   const seen = new Map<string, string>();
   for (const p of payments) {
     if (!p.billId) lines.push({ method: `vpay:${p.id}`, expected: 0, actual: num(p.amount), note: "UNPROCESSED:not allocated to a bill" });

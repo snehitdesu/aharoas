@@ -3,42 +3,50 @@
 @tailwind utilities;
 
 /**
- * Aharos semantic design tokens (CSS custom properties).
+ * RESTORA semantic design tokens (CSS custom properties).
  * The numeric scales live in tailwind.config.ts; these names give the semantic
  * layer referenced by base styles and bespoke components.
  */
 :root {
   color-scheme: light;
 
-  /* Brand — Moonstone */
-  --color-brand: #4c9db0;
-  --color-brand-hover: #357d90;
-  --color-brand-active: #2b6475;
-  --color-brand-soft: #eff6f8;
+  /* Brand — terracotta */
+  --color-brand: #c85a35;
+  --color-brand-hover: #b04a29;
+  --color-brand-active: #923b1f;
+  --color-brand-soft: #fbefe8;
 
-  /* Accent — Vanilla */
-  --color-accent: #ffebaf;
-  --color-accent-soft: #fff8e3;
-  --color-accent-strong: #e3a92b;
+  /* Accent — saffron */
+  --color-accent: #f6dfa3;
+  --color-accent-soft: #fbefd2;
+  --color-accent-strong: #cf942b;
 
-  /* Neutrals */
-  --color-background: #f7f9fa;
-  --color-surface: #ffffff;
-  --color-surface-raised: #ffffff;
-  --color-surface-subtle: #eef1f3;
-  --color-border: #e2e7ea;
-  --color-border-strong: #9aa4ac;
-  --color-text-primary: #141a1f;
-  --color-text-secondary: #3c454c;
-  --color-text-muted: #6b7681;
+  /* Paper + espresso */
+  --color-background: #f6f0e4;
+  --color-surface: #fffcf6;
+  --color-surface-raised: #fffcf6;
+  --color-surface-subtle: #efe6d6;
+  --color-border: #e6dac6;
+  --color-border-strong: #8c7964;
+  --color-text-primary: #24180f;
+  --color-text-secondary: #4a3a2c;
+  --color-text-muted: #76634f;
+  --color-espresso: #24180f;
 
   /* Semantic */
-  --color-success: #15935e;
-  --color-warning: #b8730c;
-  --color-danger: #d1443e;
-  --color-info: #357d90;
+  --color-success: #3d6a2f;
+  --color-warning: #965c10;
+  --color-danger: #a52a1f;
+  --color-info: #2b6463;
 
-  --ring-brand: 0 0 0 3px rgb(76 157 176 / 0.35);
+  --ring-brand: 0 0 0 3px rgb(200 90 53 / 0.35);
+
+  /*
+   * Paper grain: a tiny, static fractal-noise tile (inline SVG, allowed by the
+   * CSP's img-src data:). Multiplied at very low opacity over the page colour
+   * so large surfaces read as paper, never as a pattern. No runtime cost.
+   */
+  --paper-grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0.14 0 0 0 0 0.09 0 0 0 0 0.06 0 0 0 0.55 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.35'/%3E%3C/svg%3E");
 }
 
 html,
@@ -49,15 +57,36 @@ body {
 
 body {
   background-color: var(--color-background);
+  background-image: var(--paper-grain);
+  background-size: 160px 160px;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
+  font-feature-settings: "cv11", "ss01";
 }
 
-/* Brand-tinted text selection. */
+/* Editorial headings: the display serif, tight, confident. Operational UI text stays Inter. */
+h1,
+h2,
+.font-display {
+  font-family: var(--font-display), Georgia, Cambria, "Times New Roman", serif;
+  font-optical-sizing: auto;
+  letter-spacing: -0.015em;
+}
+
+/* Small caps "eyebrow" labels used above titles, table heads and sections. */
+.eyebrow {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+/* Terracotta-tinted text selection. */
 ::selection {
-  background-color: #cfeaf0;
-  color: #1a2024;
+  background-color: #f6dccd;
+  color: #24180f;
 }
 
 /* Consistent, visible focus ring for keyboard users across interactive elements. */
@@ -67,23 +96,23 @@ body {
   border-radius: 4px;
 }
 
-/* Refined, unobtrusive scrollbars (operational screens scroll a lot). */
+/* Quiet scrollbars (operational screens scroll a lot). */
 * {
   scrollbar-width: thin;
-  scrollbar-color: #cfd6db transparent;
+  scrollbar-color: #d4c4ac transparent;
 }
 *::-webkit-scrollbar {
   width: 10px;
   height: 10px;
 }
 *::-webkit-scrollbar-thumb {
-  background-color: #cfd6db;
+  background-color: #d4c4ac;
   border-radius: 9999px;
   border: 2px solid transparent;
   background-clip: content-box;
 }
 *::-webkit-scrollbar-thumb:hover {
-  background-color: #9aa4ac;
+  background-color: #8c7964;
 }
 
 /* Tabular, scannable numbers everywhere numbers matter. */
@@ -95,14 +124,14 @@ body {
 .skeleton {
   position: relative;
   overflow: hidden;
-  background-color: #eef1f3;
+  background-color: #efe6d6;
 }
 .skeleton::after {
   content: "";
   position: absolute;
   inset: 0;
   transform: translateX(-100%);
-  background: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.65), transparent);
+  background: linear-gradient(90deg, transparent, rgb(255 252 246 / 0.7), transparent);
   animation: shimmer 1.4s infinite;
 }
 @keyframes shimmer {
@@ -121,5 +150,12 @@ body {
   }
   .skeleton::after {
     animation: none;
+  }
+}
+
+/* Paper documents (bills, KOT previews) print on plain white. */
+@media print {
+  body {
+    background: #ffffff;
   }
 }

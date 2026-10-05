@@ -7,7 +7,7 @@ import { Icon, type IconName } from "@/components/ui/Icon";
 export function Spinner({ label = "Loading" }: { label?: string }) {
   return (
     <span role="status" className="inline-flex items-center gap-2 text-sm text-ink-500">
-      <span aria-hidden className="h-4 w-4 animate-spin rounded-full border-2 border-ink-200 border-t-brand-500" />
+      <span aria-hidden className="h-4 w-4 animate-spin rounded-full border-2 border-ink-300 border-t-brand-500" />
       {label}
     </span>
   );
@@ -30,11 +30,11 @@ export function EmptyState({ title, hint, action, icon }: { title: string; hint?
   return (
     <div className="flex h-full min-h-32 flex-col items-center justify-center gap-1.5 p-8 text-center">
       {icon && (
-        <span className="mb-1 inline-flex h-11 w-11 items-center justify-center rounded-xl bg-brand-50 text-brand-500">
+        <span className="mb-1 inline-flex h-12 w-12 items-center justify-center rounded-full border border-dashed border-ink-300 bg-paper-warm text-brand-600">
           <Icon name={icon} className="h-5 w-5" />
         </span>
       )}
-      <p className="text-sm font-semibold text-ink-800">{title}</p>
+      <p className="font-display text-[1.05rem] font-semibold text-ink-800">{title}</p>
       {hint && <p className="max-w-sm text-sm text-ink-500">{hint}</p>}
       {action && <div className="mt-2">{action}</div>}
     </div>
@@ -72,8 +72,8 @@ export function ErrorState({ error, onRetry, compact = false }: { error: unknown
 export function ForbiddenPage({ title, reason }: { title: string; reason: string }) {
   return (
     <main className="flex min-h-[60vh] items-center justify-center p-6">
-      <div role="alert" className="max-w-md rounded-xl border border-ink-200 bg-white p-6 text-center shadow-card">
-        <h1 className="text-base font-semibold">{title}</h1>
+      <div role="alert" className="max-w-md rounded-lg border border-ink-900 bg-paper p-6 text-center shadow-print">
+        <h1 className="text-[1.3rem] font-semibold">{title}</h1>
         <p className="mt-2 text-sm text-ink-500">{reason}</p>
         <a href="/dashboard" className="mt-4 inline-block text-sm font-medium text-brand-600 underline">
           Back to dashboard

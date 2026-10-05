@@ -13,6 +13,7 @@
  *
  * Run: npm run db:seed   (or npm run setup)
  */
+import { randomBytes } from "node:crypto";
 import { prisma } from "@/server/db/client";
 import { systemContext } from "@/server/auth/context";
 import { hashPassword } from "@/server/auth/password";
@@ -91,15 +92,15 @@ async function main() {
 
   // ---------------- A. Organization + outlets ----------------
   const org = await prisma.organization.create({
-    data: { name: "Aharos Demo Restaurant Group", legalName: "Aharos Foods Pvt Ltd", gstin: "36ABCDE1234F1Z5", currency: "INR", timezone: "Asia/Kolkata" },
+    data: { name: "Aharos Demo Restaurant Group", legalName: "Aharos Foods Pvt Ltd", gstin: "36ABCDE1234F1Z1", currency: "INR", timezone: "Asia/Kolkata" },
   });
   const orgId = org.id;
 
   const outletCentral = await prisma.outlet.create({
-    data: { organizationId: orgId, code: "HYDCEN", name: "Hyderabad Central", address: "Road No 1, Banjara Hills, Hyderabad", gstin: "36ABCDE1234F1Z5", phone: "+914012345678", openTime: "11:00", closeTime: "23:30" },
+    data: { organizationId: orgId, code: "HYDCEN", name: "Hyderabad Central", address: "Road No 1, Banjara Hills, Hyderabad", gstin: "36ABCDE1234F1Z1", phone: "+914012345678", openTime: "11:00", closeTime: "23:30" },
   });
   const outletJubilee = await prisma.outlet.create({
-    data: { organizationId: orgId, code: "HYDJUB", name: "Hyderabad Jubilee Hills", address: "Road No 36, Jubilee Hills, Hyderabad", gstin: "36ABCDE1234F1Z6", phone: "+914012345679", openTime: "11:00", closeTime: "23:30" },
+    data: { organizationId: orgId, code: "HYDJUB", name: "Hyderabad Jubilee Hills", address: "Road No 36, Jubilee Hills, Hyderabad", gstin: "36ABCDE1234F2Z0", phone: "+914012345679", openTime: "11:00", closeTime: "23:30" },
   });
   const outlets = [outletCentral, outletJubilee];
   const ctx: AccessContext = systemContext(orgId, outlets.map((o) => o.id));
@@ -343,9 +344,9 @@ async function main() {
     const ground = await prisma.floor.create({ data: { organizationId: orgId, outletId: o.id, name: "Ground Floor", sortOrder: 0 } });
     const first = await prisma.floor.create({ data: { organizationId: orgId, outletId: o.id, name: "First Floor", sortOrder: 1 } });
     let n = 0;
-    for (let i = 1; i <= 8; i++) { await prisma.restaurantTable.create({ data: { organizationId: orgId, outletId: o.id, floorId: ground.id, code: `G${i}`, capacity: i % 3 === 0 ? 6 : 4, qrToken: `${o.code}-G${i}` } }); n++; }
+    for (let i = 1; i <= 8; i++) { await prisma.restaurantTable.create({ data: { organizationId: orgId, outletId: o.id, floorId: ground.id, code: `G${i}`, capacity: i % 3 === 0 ? 6 : 4, qrToken: randomBytes(18).toString("base64url") } }); n++; }
     const firstCount = o.id === outletCentral.id ? 6 : 4;
-    for (let i = 1; i <= firstCount; i++) { await prisma.restaurantTable.create({ data: { organizationId: orgId, outletId: o.id, floorId: first.id, code: `F${i}`, capacity: 4, qrToken: `${o.code}-F${i}` } }); n++; }
+    for (let i = 1; i <= firstCount; i++) { await prisma.restaurantTable.create({ data: { organizationId: orgId, outletId: o.id, floorId: first.id, code: `F${i}`, capacity: 4, qrToken: randomBytes(18).toString("base64url") } }); n++; }
     tableCount[o.id] = n;
   }
 
@@ -476,8 +477,10 @@ async function main() {
 
   // ---------------- POS mock webhook -> idempotency -> consumption (+ unmapped) ----------------
   const provider = new MockPOSProvider();
+  // Tenant binding (H4): the provider's store id maps to this outlet; webhooks never pick their tenant from the body.
+  await prisma.integrationConnection.create({ data: { organizationId: org.id, outletId: outletCentral.id, kind: "POS", provider: "mock", externalRef: "PP-STORE-CENTRAL", status: "CONNECTED" } });
   const webhookPayload = {
-    eventId: "PP-EVT-1001", externalRef: "PP-ORDER-5001", outletId: outletCentral.id, source: "PETPOOJA", channel: "AGGREGATOR",
+    eventId: "PP-EVT-1001", externalRef: "PP-ORDER-5001", storeId: "PP-STORE-CENTRAL", source: "PETPOOJA", channel: "AGGREGATOR",
     placedAt: new Date().toISOString(),
     customer: { name: "Zomato Customer", phone: "9000000099" },
     items: [
@@ -485,7 +488,7 @@ async function main() {
       { posItemCode: "M010", name: "Butter Chicken", qty: 1, unitPrice: 340, taxPct: 5 },
       { posItemCode: "ZZ999", name: "Mystery Combo", qty: 1, unitPrice: 199, taxPct: 5 }, // unmapped -> queue
     ],
-    payments: [{ method: "ONLINE", amount: 1179, providerRef: "pay_zomato_1" }],
+    payments: [{ method: "ONLINE", amount: 1237.95, providerRef: "pay_zomato_1" }], // = lines 1179 + 5% GST 58.95
     settled: true,
   };
   const rawBody = JSON.stringify(webhookPayload);

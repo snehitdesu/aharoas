@@ -138,7 +138,7 @@ export class AharosServer {
   private async waitHealthy(timeoutMs: number, proc: UtilityProcess): Promise<void> {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
-      if (this.proc !== proc) throw new Error("Aharos server exited during startup (see logs\\server.log)");
+      if (this.proc !== proc) throw new Error("Aharos server exited during startup (see logs/server.log)");
       try {
         const res = await fetch(`${this.origin}/api/health`, { signal: AbortSignal.timeout(2_000) });
         if (res.ok) return;
@@ -147,7 +147,7 @@ export class AharosServer {
       }
       await new Promise((r) => setTimeout(r, 100));
     }
-    throw new Error("Aharos server did not become healthy in time (see logs\\server.log)");
+    throw new Error("Aharos server did not become healthy in time (see logs/server.log)");
   }
 
   async stop(): Promise<void> {

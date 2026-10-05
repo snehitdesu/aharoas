@@ -1,8 +1,8 @@
 {
   "name": "aharos",
-  "version": "0.1.0",
+  "version": "1.0.0-rc.1",
   "private": true,
-  "description": "Aharos — Restaurant Operating System",
+  "description": "RESTORA — The Operating System for Restaurants",
   "scripts": {
     "dev": "next dev",
     "build": "prisma generate && next build",
@@ -20,13 +20,16 @@
     "bootstrap:owner": "tsx scripts/bootstrap-owner.ts",
     "setup": "prisma generate && prisma db push && tsx prisma/seed.ts",
     "db:pg:schema": "node scripts/pg-schema.mjs",
+    "db:pg:deploy": "node scripts/pg-schema.mjs && prisma migrate deploy --schema prisma/postgres/schema.prisma",
     "test:pg": "node scripts/pg-schema.mjs && prisma generate --schema prisma/postgres/schema.prisma && vitest run",
     "e2e": "npm run build && playwright test",
     "e2e:test": "playwright test",
     "desktop:build": "node desktop/scripts/build.mjs",
     "desktop:start": "electron build/desktop/app",
-    "desktop:pack": "node desktop/scripts/build.mjs && electron-builder --dir",
-    "desktop:dist": "node desktop/scripts/build.mjs && electron-builder --win",
+    "desktop:pack": "node desktop/scripts/build.mjs && electron-builder --dir --publish never",
+    "desktop:dist": "node desktop/scripts/build.mjs && electron-builder --win --publish never",
+    "desktop:dist:mac": "node desktop/scripts/build.mjs && electron-builder --mac --publish never",
+    "desktop:verify": "tsx desktop/scripts/verify-package.ts",
     "desktop:e2e": "playwright test -c playwright.desktop.config.ts"
   },
   "prisma": {

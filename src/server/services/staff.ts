@@ -2,7 +2,7 @@
  * Staff services: user/membership management, attendance, shifts, leave, tasks.
  *
  * Authority model (built on the existing RBAC matrix + AccessContext):
- *  - Outlet-scoped roles (MANAGER, STORE, KITCHEN, CAPTAIN, CASHIER, CUSTOMER)
+ *  - Outlet-scoped roles (MANAGER, STORE, KITCHEN, CAPTAIN, CASHIER, ACCOUNTANT, CUSTOMER)
  *    can be granted/revoked by an actor holding `staff.manage` AT THAT OUTLET.
  *  - Org-wide memberships (outletId = null) and org-wide roles (OWNER, ADMIN,
  *    AREA_MANAGER) require `role.manage`, which only OWNER/ADMIN (and super
@@ -37,7 +37,7 @@ export { TASK_TRANSITIONS };
 /** Relative authority of roles. Higher can manage lower. */
 export const ROLE_RANK: Record<RoleT, number> = {
   SUPER_ADMIN: 100, OWNER: 90, ADMIN: 80, AREA_MANAGER: 70, MANAGER: 50,
-  STORE: 20, KITCHEN: 20, CAPTAIN: 20, CASHIER: 20, CUSTOMER: 0,
+  STORE: 20, KITCHEN: 20, CAPTAIN: 20, CASHIER: 20, ACCOUNTANT: 20, CUSTOMER: 0,
 };
 
 const rank = (role: string) => ROLE_RANK[role as RoleT] ?? 0;
@@ -214,7 +214,8 @@ export async function listStaff(db: PrismaClient, ctx: AccessContext, filter: { 
   const take = Math.min(filter.take ?? 50, 200);
   const rows = await db.user.findMany({
     where: { organizationId: ctx.organizationId, ...(outletFilter ? { memberships: { some: { outletId: { in: outletFilter }, active: true } } } : {}) },
-    select: { id: true, email: true, name: true, phone: true, active: true, lastLoginAt: true, memberships: { where: { active: true }, select: { id: true, role: true, outletId: true } } },
+    // Outlet-scoped managers see a colleague's roles at their own outlets (and org-wide roles), not at other outlets.
+    select: { id: true, email: true, name: true, phone: true, active: true, lastLoginAt: true, memberships: { where: { active: true, ...(outletFilter ? { OR: [{ outletId: { in: outletFilter } }, { outletId: null }] } : {}) }, select: { id: true, role: true, outletId: true } } },
     orderBy: [{ name: "asc" }, { id: "asc" }],
     take: take + 1,
     ...(filter.cursor ? { cursor: { id: filter.cursor }, skip: 1 } : {}),

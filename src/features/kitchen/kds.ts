@@ -56,5 +56,7 @@ export function urgency(createdAt: string, now: number = Date.now(), thresholds 
 export function ticketLabel(t: KdsTicket): string {
   if (!t.order) return "Order";
   if (t.order.channel === "DINE_IN") return t.order.table ? `Table ${t.order.table.code}` : "Dine-in";
+  // A guest's QR order is a dine-in order placed from the table's QR code.
+  if (t.order.channel === "QR") return t.order.table ? `Table ${t.order.table.code} · QR` : "QR order";
   return t.order.channel.replace("_", " ").toLowerCase().replace(/^\w/, (c) => c.toUpperCase());
 }

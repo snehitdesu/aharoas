@@ -1,6 +1,6 @@
 /**
  * Builds the isolated E2E database (prisma/e2e.db) from scratch:
- *   1. force-reset the schema into prisma/e2e.db   (dev.db is never touched)
+ *   1. delete prisma/e2e.db and apply the migration history (dev.db is never touched)
  *   2. run the real demo seed (prisma/seed.ts)
  *   3. add E2E fixtures through the REAL services (no raw inserts):
  *      - "E2E Pizza": variant + required single-choice group + optional max-2 group
@@ -20,13 +20,23 @@ async function main() {
   process.env.DATABASE_URL = E2E_DB_URL;
   const prismaCli = require.resolve("prisma/build/index.js");
   if (isPostgres) {
-    execFileSync(process.execPath, [prismaCli, "db", "push", "--schema", "prisma/postgres/schema.prisma", "--force-reset", "--skip-generate", "--accept-data-loss"], { stdio: "inherit", env: { ...process.env, DATABASE_URL: E2E_DB_URL } });
+    // Never reset a PostgreSQL database from here: it must be FRESH (create one per
+    // run, e.g. `createdb restora_e2e_<n>`). It then gets exactly the production
+    // path — the committed migration history via `migrate deploy` — and the demo
+    // seed below (which deletes everything) can only ever touch an empty database.
+    const { PrismaClient } = await import("@prisma/client");
+    const probe = new PrismaClient({ datasources: { db: { url: E2E_DB_URL } } });
+    const [{ n }] = await probe.$queryRawUnsafe<{ n: number }[]>(`SELECT count(*)::int AS n FROM pg_tables WHERE schemaname = current_schema()`);
+    await probe.$disconnect();
+    if (n > 0) throw new Error(`E2E_DATABASE_URL points at a database that already has ${n} tables; the E2E suite needs a fresh, empty, disposable database`);
+    execFileSync(process.execPath, [prismaCli, "migrate", "deploy", "--schema", "prisma/postgres/schema.prisma"], { stdio: "inherit", env: { ...process.env, DATABASE_URL: E2E_DB_URL } });
   } else {
     for (const s of ["", "-journal", "-wal", "-shm"]) if (fs.existsSync(E2E_DB_PATH + s)) fs.rmSync(E2E_DB_PATH + s);
-    execFileSync(process.execPath, [prismaCli, "db", "push", "--skip-generate", "--accept-data-loss"], { stdio: "inherit", env: { ...process.env, DATABASE_URL: E2E_DB_URL } });
+    // Fresh file + the committed SQLite migration history (never `db push`).
+    execFileSync(process.execPath, [prismaCli, "migrate", "deploy"], { stdio: "inherit", env: { ...process.env, DATABASE_URL: E2E_DB_URL } });
   }
   const tsx = require.resolve("tsx/cli");
-  // The E2E database was just reset above, so the demo seed's safety guard may be overridden.
+  // The E2E database is fresh (SQLite file recreated above / PostgreSQL verified empty), so the demo seed's safety guard may be overridden.
   execFileSync(process.execPath, [tsx, "prisma/seed.ts"], { stdio: "inherit", env: { ...process.env, DATABASE_URL: E2E_DB_URL, ALLOW_DEMO_SEED: "true" } });
 
   // Fixtures through the real services (imported after DATABASE_URL is set).

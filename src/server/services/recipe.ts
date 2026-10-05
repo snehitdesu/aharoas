@@ -22,6 +22,7 @@ import { runInTx } from "@/server/services/_workflow";
 import { D, dMul, dDiv, qty as roundQty, money, num } from "@/domain/money";
 import { RecipeCycleError, findCycleOnAdd, type RecipeGraph } from "@/domain/recipe/cycle";
 import { textContains } from "@/server/db/search";
+import { resolveUnit } from "@/server/services/inventory";
 
 type Tx = Prisma.TransactionClient;
 type Client = PrismaClient | Tx;
@@ -38,19 +39,9 @@ export async function convertToBase(
 ): Promise<Prisma.Decimal> {
   const material = await db.material.findUnique({ where: { id: materialId } });
   if (!material || material.organizationId !== ctx.organizationId) throw new NotFoundError("Material not found");
-  if (!fromUnitId || fromUnitId === material.baseUnitId) return quantity;
-
-  // material-specific conversion first, then global
-  const conv =
-    (await db.unitConversion.findFirst({
-      where: { organizationId: ctx.organizationId, fromUnitId, toUnitId: material.baseUnitId, materialId },
-    })) ??
-    (await db.unitConversion.findFirst({
-      where: { organizationId: ctx.organizationId, fromUnitId, toUnitId: material.baseUnitId, materialId: null },
-    }));
-
-  if (!conv) throw new ValidationError(`No unit conversion from ${fromUnitId} to base unit of material ${materialId}`);
-  return dMul(quantity, conv.factor);
+  // One conversion rule for the whole system (inventory.resolveUnit).
+  const { factor } = await resolveUnit(db, ctx, materialId, fromUnitId);
+  return dMul(quantity, factor);
 }
 
 /**

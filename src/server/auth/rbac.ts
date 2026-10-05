@@ -53,6 +53,8 @@ export const PERMISSIONS = [
   // kitchen
   "kot.view",
   "kot.update",
+  // Floor staff: mark a READY ticket SERVED (no other KDS transition).
+  "kot.serve",
   // finance
   "finance.view",
   "finance.reconcile",
@@ -119,6 +121,7 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     "payment.refund",
     "kot.view",
     "kot.update",
+    "kot.serve",
     "finance.view",
     "finance.reconcile",
     "finance.petty_cash",
@@ -151,7 +154,7 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     "task.view",
   ],
   KITCHEN: ["recipe.view", "menu.view", "kot.view", "kot.update", "order.view", "inventory.view", "task.view"],
-  CAPTAIN: ["menu.view", "order.view", "order.create", "order.modify", "kot.view", "customer.view", "reservation.manage"],
+  CAPTAIN: ["menu.view", "order.view", "order.create", "order.modify", "kot.view", "kot.serve", "customer.view", "reservation.manage"],
   CASHIER: [
     "menu.view",
     "order.view",
@@ -162,6 +165,21 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     "customer.view",
     "customer.manage",
     "finance.view",
+  ],
+  ACCOUNTANT: [
+    "master.view",
+    "vendor.view",
+    "purchase.view",
+    "bill.manage",
+    "vendor.pay",
+    "order.view",
+    "finance.view",
+    "finance.reconcile",
+    "finance.petty_cash",
+    "expense.manage",
+    "reports.view",
+    "anomaly.view",
+    "export.run",
   ],
   CUSTOMER: [],
 };

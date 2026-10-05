@@ -1,53 +1,203 @@
-# CI for the Aharos backend.
-# NOTE: this workflow has not been executed yet (no CI runner was available when
-# it was written). The `postgres` job is the path for validating the PostgreSQL
-# branches (raw SQL in analytics, serializable transactions, constraints) that
-# were only verified statically. See docs/postgres.md.
+# CI for Aharos. Three independent jobs, each on its own runner and checkout, so
+# the SQLite and PostgreSQL Prisma clients (one generated client per checkout)
+# are never generated or used concurrently in the same node_modules.
+#
+#   sqlite   — dev/test/desktop engine: migrations, drift, typecheck, lint, tests, web build
+#   postgres — the production path: fresh database → `npm run db:pg:deploy`
+#              (prisma migrate deploy) → migrate status → drift → full suite
+#   desktop  — Windows: desktop build, desktop E2E (unpacked), packaged-app
+#              verification (fuses, upgrade, launch attacks, asar integrity)
+#   desktop-macos — the same on macOS, once per arch (Apple Silicon + Intel
+#              runners), plus the RESTORA.app + DMG for that arch
+#
+# Every step is named for what it proves, so a red step says which area failed.
+# Nothing is reset or pushed: no `db push`, no `--force-reset`, no `|| true`.
 name: ci
 
 on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   sqlite:
+    name: SQLite (dev/test/desktop engine)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # Relative to prisma/schema.prisma; fresh files inside this runner's checkout.
+      CI_SQLITE_DEPLOY_URL: file:./ci-deploy.db
+      CI_SQLITE_SHADOW_URL: file:./ci-shadow.db
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: npm }
-      - run: npm ci
-      - run: npx prisma validate && npx prisma generate
-      - run: npm run typecheck
-      - run: npm run lint
-      - run: npm test
-      - run: npm run build
+      - name: Install dependencies
+        run: npm ci
+      - name: Prisma schema validate + generate (SQLite client)
+        run: npx prisma validate && npx prisma generate
+      - name: "Migration: deploy committed SQLite migrations into a fresh database"
+        run: DATABASE_URL=$CI_SQLITE_DEPLOY_URL npx prisma migrate deploy
+      - name: "Migration: status"
+        run: DATABASE_URL=$CI_SQLITE_DEPLOY_URL npx prisma migrate status
+      - name: "Migration drift: committed SQLite migrations vs prisma/schema.prisma"
+        # Exit 2 = the schema has changes with no committed migration.
+        run: >-
+          npx prisma migrate diff
+          --from-migrations prisma/migrations
+          --to-schema-datamodel prisma/schema.prisma
+          --shadow-database-url $CI_SQLITE_SHADOW_URL
+          --exit-code
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Lint
+        run: npm run lint
+      - name: "Tests: full suite on SQLite"
+        run: npm test
+      - name: "Build: web (next build)"
+        run: npm run build
 
   postgres:
+    name: PostgreSQL 16 (production path)
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     services:
       postgres:
         image: postgres:16
         env:
           POSTGRES_USER: aharos
           POSTGRES_PASSWORD: aharos
-          POSTGRES_DB: aharos_test
+          POSTGRES_DB: aharos_ci
           # Non-UTC server zone on purpose: raw SQL must not depend on the session
           # TimeZone (a UTC-only CI hid a date-range shift in analytics).
           TZ: Asia/Kolkata
           PGTZ: Asia/Kolkata
         ports: ["5432:5432"]
         options: >-
-          --health-cmd "pg_isready -U aharos" --health-interval 5s --health-timeout 5s --health-retries 10
+          --health-cmd "pg_isready -U aharos" --health-interval 5s --health-timeout 5s --health-retries 20
     env:
-      TEST_DATABASE_URL: postgresql://aharos:aharos@localhost:5432/aharos_test
+      PG_BASE: postgresql://aharos:aharos@localhost:5432
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: npm }
-      - run: npm ci
-      - run: npm run test:pg
-      - name: Baseline migration SQL (artifact for review)
-        run: DATABASE_URL=$TEST_DATABASE_URL npx prisma migrate diff --from-empty --to-schema-datamodel prisma/postgres/schema.prisma --script > postgres-baseline.sql
+      - name: Install dependencies
+        run: npm ci
+      - name: "PostgreSQL: server ready"
+        run: docker exec ${{ job.services.postgres.id }} pg_isready -U aharos -d aharos_ci
+      - name: "PostgreSQL: create fresh databases (deploy target, shadow, test suites)"
+        run: |
+          for db in aharos_deploy aharos_shadow aharos_test aharos_security; do
+            docker exec ${{ job.services.postgres.id }} createdb -U aharos "$db"
+          done
+      - name: "Migration: npm run db:pg:deploy (prisma migrate deploy — the production command)"
+        run: DATABASE_URL=$PG_BASE/aharos_deploy npm run db:pg:deploy
+      - name: "Migration: status"
+        run: DATABASE_URL=$PG_BASE/aharos_deploy npx prisma migrate status --schema prisma/postgres/schema.prisma
+      - name: "Migration drift: committed PostgreSQL migrations vs generated schema (shadow database)"
+        # Exit 2 = prisma/schema.prisma changed with no committed PostgreSQL migration.
+        run: >-
+          DATABASE_URL=$PG_BASE/aharos_deploy npx prisma migrate diff
+          --from-migrations prisma/postgres/migrations
+          --to-schema-datamodel prisma/postgres/schema.prisma
+          --shadow-database-url $PG_BASE/aharos_shadow
+          --exit-code
+      - name: "Migration drift: deployed database vs generated schema"
+        run: >-
+          DATABASE_URL=$PG_BASE/aharos_deploy npx prisma migrate diff
+          --from-url $PG_BASE/aharos_deploy
+          --to-schema-datamodel prisma/postgres/schema.prisma
+          --exit-code
+      - name: Generate PostgreSQL Prisma client
+        run: npx prisma generate --schema prisma/postgres/schema.prisma
+      - name: Typecheck (against the PostgreSQL client)
+        run: npm run typecheck
+      - name: Lint
+        run: npm run lint
+      - name: "Tests (PostgreSQL): security, tenant isolation, payments, idempotency, concurrency, Decimal"
+        env:
+          TEST_DATABASE_URL: ${{ env.PG_BASE }}/aharos_security
+        run: >-
+          npx vitest run
+          tests/api/security.test.ts tests/api/routes.test.ts tests/auth tests/domain/org-isolation.test.ts
+          tests/domain/payment-balance.test.ts tests/domain/idempotency-refunds.test.ts
+          tests/domain/webhook-tenant.test.ts tests/domain/webhooks-reconciliation.test.ts
+          tests/domain/pos-backend.test.ts tests/domain/reservation-concurrency.test.ts tests/db
+      - name: "Tests (PostgreSQL): full suite on a fresh migrated database"
+        env:
+          TEST_DATABASE_URL: ${{ env.PG_BASE }}/aharos_test
+        run: npx vitest run
+
+  desktop:
+    name: Desktop (Windows) build, E2E and packaged-app verification
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      NEXT_TELEMETRY_DISABLED: "1"
+      # Unsigned unless signing secrets are configured (docs/desktop-release.md).
+      # electron-builder reads these; they are never committed.
+      CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - name: Install dependencies
+        run: npm ci
+      - name: "Build: desktop payload (next standalone + secret scan)"
+        run: npm run desktop:build
+      - name: "Desktop E2E: real app on the unpacked build"
+        run: npm run desktop:e2e
+      - name: "Package: electron-builder (unpacked, fuses flipped, never published)"
+        run: npx electron-builder --dir --publish never
+      - name: "Packaged app: fuses, upgrade from previous release, launch attacks, asar integrity"
+        run: npm run desktop:verify
+
+  desktop-macos:
+    name: Desktop (macOS ${{ matrix.arch }}) build, E2E, packaged-app verification and DMG
+    # One runner per arch: the server payload's native modules (Prisma engine, sharp)
+    # are the build machine's, so each DMG is built on a Mac of its own arch.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: macos-15, arch: arm64 }
+          - { runner: macos-15-intel, arch: x64 }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    env:
+      NEXT_TELEMETRY_DISABLED: "1"
+      # Unsigned (ad-hoc) unless a Developer ID certificate is configured
+      # (docs/desktop-release.md). Never committed.
+      CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - name: Install dependencies
+        run: npm ci
+      - name: "Runner arch matches the package arch"
+        run: test "$(node -p process.arch)" = "${{ matrix.arch }}"
+      - name: "Build: desktop payload (next standalone + secret scan)"
+        run: npm run desktop:build
+      - name: "Desktop E2E: real app on the unpacked build"
+        run: npm run desktop:e2e
+      - name: "Package: RESTORA.app (fuses flipped, never published)"
+        run: npx electron-builder --mac --dir --publish never
+      - name: "Packaged app: fuses, upgrade from previous release, launch attacks, asar integrity"
+        run: npm run desktop:verify
+      - name: "Package: DMG"
+        run: npx electron-builder --mac --publish never
       - uses: actions/upload-artifact@v4
-        with: { name: postgres-baseline, path: postgres-baseline.sql }
+        with:
+          name: restora-mac-${{ matrix.arch }}
+          path: dist-desktop/*.dmg
+          if-no-files-found: error

@@ -11,6 +11,7 @@ import { createOrder, addOrderItem } from "@/server/services/orders";
 import { createPayment, verifyPayment, refundPayment } from "@/server/services/payment";
 import { receiveWebhook } from "@/server/services/webhooks";
 import { signPaymentPayload } from "@/integrations/payment";
+import { bindWebhook } from "./webhookBinding";
 
 const RUN = Date.now().toString(36);
 let orgId: string, outletA: string, outletB: string, ctx: AccessContext, cashier1: AccessContext, cashier2: AccessContext;
@@ -26,6 +27,12 @@ beforeAll(async () => {
 });
 
 afterAll(async () => { await prisma.$disconnect(); });
+
+
+// H4 tenant binding for the provider account used below.
+beforeAll(async () => {
+  await bindWebhook({ kind: "PAYMENT", provider: "mock", organizationId: orgId, externalRef: `acct-${orgId}` });
+});
 
 describe("order creation idempotency", () => {
   it("first request creates; an exact retry returns the original order", async () => {
@@ -72,7 +79,7 @@ describe("gateway refunds", () => {
     return p;
   }
   const refundEvent = (eventId: string, paymentRef: string, refundRef: string, amount: number) => {
-    const raw = JSON.stringify({ eventId: `${eventId}-${RUN}`, event: "refund.processed", providerRef: `${paymentRef}-${RUN}`, refundRef, amount });
+    const raw = JSON.stringify({ accountId: `acct-${orgId}`, eventId: `${eventId}-${RUN}`, event: "refund.processed", providerRef: `${paymentRef}-${RUN}`, refundRef, amount });
     return receiveWebhook({ kind: "PAYMENT", provider: "mock", rawBody: raw, signature: signPaymentPayload(raw) });
   };
 
@@ -113,11 +120,11 @@ describe("gateway refunds", () => {
 
   it("bad signatures, unknown events and malformed refund events are safe", async () => {
     await gatewayPayment("gw4");
-    const raw = JSON.stringify({ eventId: `re4-${RUN}`, event: "refund.processed", providerRef: `gw4-${RUN}`, refundRef: "x", amount: 10 });
+    const raw = JSON.stringify({ accountId: `acct-${orgId}`, eventId: `re4-${RUN}`, event: "refund.processed", providerRef: `gw4-${RUN}`, refundRef: "x", amount: 10 });
     expect((await receiveWebhook({ kind: "PAYMENT", provider: "mock", rawBody: raw, signature: "forged" })).status).toBe("INVALID_SIGNATURE");
-    const unknown = JSON.stringify({ eventId: `re5-${RUN}`, event: "dispute.created", providerRef: `gw4-${RUN}`, amount: 10 });
+    const unknown = JSON.stringify({ accountId: `acct-${orgId}`, eventId: `re5-${RUN}`, event: "dispute.created", providerRef: `gw4-${RUN}`, amount: 10 });
     expect((await receiveWebhook({ kind: "PAYMENT", provider: "mock", rawBody: unknown, signature: signPaymentPayload(unknown) })).status).toBe("IGNORED");
-    const noRef = JSON.stringify({ eventId: `re6-${RUN}`, event: "refund.processed", providerRef: `gw4-${RUN}`, amount: 10 });
+    const noRef = JSON.stringify({ accountId: `acct-${orgId}`, eventId: `re6-${RUN}`, event: "refund.processed", providerRef: `gw4-${RUN}`, amount: 10 });
     expect((await receiveWebhook({ kind: "PAYMENT", provider: "mock", rawBody: noRef, signature: signPaymentPayload(noRef) })).status).toBe("MALFORMED");
     expect(await prisma.refund.count({ where: { organizationId: orgId, payment: { providerRef: `gw4-${RUN}` } } })).toBe(0);
   });

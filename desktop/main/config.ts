@@ -1,7 +1,9 @@
 /**
- * Local installation configuration (%APPDATA%\Aharos\config.json) and the data
+ * Local installation configuration (<appData>/Aharos/config.json — %APPDATA%\Aharos
+ * on Windows, ~/Library/Application Support/Aharos on macOS) and the data
  * directory layout. Pure Node (no Electron) so it is unit-tested; secret
- * encryption is injected by the caller (Electron safeStorage / DPAPI).
+ * encryption is injected by the caller (Electron safeStorage: DPAPI on Windows,
+ * the Keychain on macOS).
  */
 import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs";
@@ -41,7 +43,11 @@ export type DesktopConfig = {
   version: 1;
   installId: string;
   port: number;
-  /** AUTH_SECRET for this install: { enc: "dpapi" | "plain", value: base64 }. */
+  /**
+   * AUTH_SECRET for this install: { enc: "dpapi" | "plain", value: base64 }.
+   * "dpapi" means "encrypted with Electron safeStorage" (DPAPI on Windows, the
+   * Keychain on macOS); the label is kept so existing installs keep loading.
+   */
   secret: { enc: "dpapi" | "plain"; value: string };
   lastAutoBackupAt?: string;
   window?: WindowBounds;
@@ -85,7 +91,7 @@ export function loadOrCreateConfig(file: string, codec: SecretCodec, now = new D
 
 export function readSecret(config: DesktopConfig, codec: SecretCodec): string {
   if (config.secret.enc === "dpapi") {
-    if (!codec.available) throw new Error("This installation's secret is protected by Windows and cannot be read by the current user");
+    if (!codec.available) throw new Error("This installation's secret is protected by the operating system key store and cannot be read by the current user");
     return codec.decrypt(config.secret.value);
   }
   return config.secret.value;
@@ -96,4 +102,16 @@ export function saveConfig(file: string, config: DesktopConfig): void {
   const tmp = `${file}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(config, null, 2), { mode: 0o600 });
   fs.renameSync(tmp, file);
+}
+
+/**
+ * File name of Prisma's Node-API query engine for a platform/arch, as `prisma
+ * generate` writes it into node_modules/.prisma/client. The packaged server only
+ * contains the engine of the machine it was built on (no cross-compilation), so
+ * desktop/scripts/after-pack.cjs refuses packages whose engine does not match.
+ */
+export function prismaEngineFile(platform: NodeJS.Platform, arch: string): string | null {
+  if (platform === "win32") return "query_engine-windows.dll.node";
+  if (platform === "darwin") return arch === "arm64" ? "libquery_engine-darwin-arm64.dylib.node" : "libquery_engine-darwin.dylib.node";
+  return null; // Linux engines depend on the OpenSSL version: let Prisma find its own.
 }

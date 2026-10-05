@@ -17,7 +17,8 @@ import type { PrismaClient } from "@prisma/client";
 import { z } from "zod";
 import { PaymentMethod, PettyCashType, ReconciliationStatus } from "@/constants/enums";
 import { prisma } from "@/server/db/client";
-import { type AccessContext, assertOutletAccess, ValidationError, NotFoundError } from "@/server/db/scope";
+import { type AccessContext, assertOutletAccess, ForbiddenError, ValidationError, NotFoundError } from "@/server/db/scope";
+import { idempotentCreate, requestHashOf } from "@/server/services/idempotency";
 import { assertOutletInOrg } from "@/server/db/outletGuard";
 import { assertCan } from "@/server/auth/rbac";
 import { writeAudit } from "@/server/audit/log";
@@ -25,13 +26,13 @@ import { type Client, type Tx, runInTx } from "@/server/services/_workflow";
 import { raiseAnomaly } from "@/server/services/anomaly";
 import { saveReconciliationTx, completeReconciliationTx } from "@/server/services/reconciliation";
 import { outletBusinessDay, businessDateInput, type BusinessDateInput } from "@/server/services/businessDay";
-import { D, money, num } from "@/domain/money";
-import { analyticsInternals as A, authorizedOutletIds, type AnalyticsFilter, type SalesSummary } from "@/server/services/analytics";
+import { D, money, moneyAmount, num } from "@/domain/money";
+import { analyticsInternals as A, authorizedOutletIds, COLLECTED_PAYMENT_STATUSES, type AnalyticsFilter, type PaymentMethodRow, type SalesSummary } from "@/server/services/analytics";
 
 export { vendorDues } from "@/server/services/procurement";
 
 /** Payment statuses that represent money actually collected. */
-const COLLECTED_STATUSES = ["SUCCESS", "PARTIAL", "REFUNDED"];
+const COLLECTED_STATUSES = COLLECTED_PAYMENT_STATUSES;
 /** Absolute difference (₹) above which a reconciliation/drawer mismatch is flagged. */
 export const FINANCE_RULES = { mismatchTolerance: 1 };
 
@@ -40,66 +41,158 @@ function actor(ctx: AccessContext): string | null {
 }
 
 
+// ---------------- Expense categories ----------------
+
+/** Provisioned for an organization the first time it records or lists expenses. */
+export const DEFAULT_EXPENSE_CATEGORIES = ["RENT", "UTILITIES", "GAS", "SALARY", "REPAIRS", "MARKETING", "SUPPLIES", "MISC"];
+
+async function ensureDefaultCategories(tx: Tx | PrismaClient, ctx: AccessContext) {
+  const n = await tx.expenseCategory.count({ where: { organizationId: ctx.organizationId } });
+  if (n === 0) await tx.expenseCategory.createMany({ data: DEFAULT_EXPENSE_CATEGORIES.map((name) => ({ organizationId: ctx.organizationId, name })) });
+}
+
+export async function listExpenseCategories(db: PrismaClient, ctx: AccessContext, opts: { includeInactive?: boolean } = {}) {
+  assertCan(ctx, "finance.view");
+  await runInTx(db, (tx) => ensureDefaultCategories(tx, ctx));
+  return db.expenseCategory.findMany({ where: { organizationId: ctx.organizationId, ...(opts.includeInactive ? {} : { active: true }) }, orderBy: { name: "asc" } });
+}
+
+const categorySchema = z.object({ name: z.string().trim().min(2).max(40) }).strict();
+
+/** Categories are organization-wide: managed by an org-wide role holding expense.manage. */
+function assertCategoryManager(ctx: AccessContext) {
+  assertCan(ctx, "expense.manage");
+  if (!ctx.isOrgWide && !ctx.isSuperAdmin) throw new ForbiddenError("Expense categories are organization-wide; changes need an org-wide role");
+}
+
+export async function createExpenseCategory(ctx: AccessContext, input: z.input<typeof categorySchema>, db: Client = prisma) {
+  const data = categorySchema.parse(input);
+  assertCategoryManager(ctx);
+  return runInTx(db, async (tx) => {
+    await ensureDefaultCategories(tx, ctx);
+    const dup = await tx.expenseCategory.findUnique({ where: { organizationId_name: { organizationId: ctx.organizationId, name: data.name } } });
+    if (dup) throw new ValidationError(`Category ${data.name} already exists`);
+    const cat = await tx.expenseCategory.create({ data: { organizationId: ctx.organizationId, name: data.name } });
+    await writeAudit(tx, ctx, { action: "CREATE", entityType: "ExpenseCategory", entityId: cat.id, after: { name: cat.name } });
+    return cat;
+  });
+}
+
+/** Deactivate / reactivate (categories are never deleted: past expenses keep their category). */
+export async function setExpenseCategoryActive(ctx: AccessContext, categoryId: string, active: boolean, db: Client = prisma) {
+  z.boolean().parse(active);
+  assertCategoryManager(ctx);
+  return runInTx(db, async (tx) => {
+    const cat = await tx.expenseCategory.findUnique({ where: { id: categoryId } });
+    if (!cat || cat.organizationId !== ctx.organizationId) throw new NotFoundError("Category not found");
+    const updated = await tx.expenseCategory.update({ where: { id: categoryId }, data: { active } });
+    await writeAudit(tx, ctx, { action: "UPDATE", entityType: "ExpenseCategory", entityId: categoryId, before: { active: cat.active }, after: { active } });
+    return updated;
+  });
+}
+
 // ---------------- Expenses ----------------
 
 const expenseSchema = z.object({
   outletId: z.string(),
-  category: z.string().min(1),
-  amount: z.number().positive(),
-  description: z.string().optional(),
+  category: z.string().trim().min(1).max(40),
+  amount: moneyAmount(z.number().positive()),
+  description: z.string().trim().max(500).optional(),
   paidVia: z.enum(["CASH", "BANK", "UPI", "PETTY_CASH"]).default("CASH"),
   spentAt: z.coerce.date().optional(),
-  attachmentUrl: z.string().optional(),
+  attachmentUrl: z.string().max(500).optional(),
 });
 
-export async function createExpense(ctx: AccessContext, input: z.input<typeof expenseSchema>, db: Client = prisma) {
+/** Clock skew allowed on spentAt; an expense cannot be dated in the future. */
+const FUTURE_SLACK_MS = 10 * 60_000;
+
+/**
+ * Record an expense (active category, ≤ 2 decimals, not future-dated). Paying
+ * via PETTY_CASH also posts a petty-cash outflow and cannot overdraw the box.
+ * Idempotency-Key: a retried submission returns the original expense.
+ */
+export async function createExpense(ctx: AccessContext, input: z.input<typeof expenseSchema>, db: Client = prisma, idempotencyKey?: string) {
   const data = expenseSchema.parse(input);
   assertOutletAccess(ctx, data.outletId);
   assertCan(ctx, "expense.manage", data.outletId);
-  return runInTx(db, async (tx) => {
-    await assertOutletInOrg(tx, ctx, data.outletId);
-    // Paying out of petty cash cannot overdraw the box.
-    if (data.paidVia === "PETTY_CASH") {
-      const bal = await pettyBalanceTx(tx, ctx, data.outletId);
-      if (bal.lt(data.amount)) throw new ValidationError(`Insufficient petty cash: balance ${num(bal)}, expense ${data.amount}`);
-    }
-    const expense = await tx.expense.create({
-      data: {
-        organizationId: ctx.organizationId, outletId: data.outletId, category: data.category, amount: money(data.amount),
-        description: data.description, paidVia: data.paidVia, spentAt: data.spentAt ?? new Date(), attachmentUrl: data.attachmentUrl, createdById: actor(ctx),
-      },
-    });
-    // Paying an expense out of petty cash also posts a petty-cash movement.
-    if (data.paidVia === "PETTY_CASH") {
-      await tx.pettyCashTxn.create({
-        data: { organizationId: ctx.organizationId, outletId: data.outletId, type: "EXPENSE", amount: money(-data.amount), category: data.category, reason: data.description ?? `Expense ${expense.id}`, actorId: actor(ctx) },
+  if (data.spentAt && data.spentAt.getTime() > Date.now() + FUTURE_SLACK_MS) throw new ValidationError("An expense cannot be dated in the future");
+  return idempotentCreate({
+    key: idempotencyKey,
+    hash: requestHashOf(ctx, "expense", data),
+    findPrior: (key) => prisma.expense.findUnique({ where: { organizationId_idempotencyKey: { organizationId: ctx.organizationId, idempotencyKey: key } } }),
+    create: (key, hash) => runInTx(db, async (tx) => {
+      await assertOutletInOrg(tx, ctx, data.outletId);
+      await ensureDefaultCategories(tx, ctx);
+      const cat = await tx.expenseCategory.findUnique({ where: { organizationId_name: { organizationId: ctx.organizationId, name: data.category } } });
+      if (!cat || !cat.active) throw new ValidationError(`Unknown or inactive expense category "${data.category}"`);
+      // Paying out of petty cash cannot overdraw the box.
+      if (data.paidVia === "PETTY_CASH") {
+        const bal = await pettyBalanceTx(tx, ctx, data.outletId);
+        if (bal.lt(data.amount)) throw new ValidationError(`Insufficient petty cash: balance ${num(bal)}, expense ${data.amount}`);
+      }
+      const expense = await tx.expense.create({
+        data: {
+          organizationId: ctx.organizationId, outletId: data.outletId, category: data.category, amount: money(data.amount), idempotencyKey: key, requestHash: hash,
+          description: data.description, paidVia: data.paidVia, spentAt: data.spentAt ?? new Date(), attachmentUrl: data.attachmentUrl, createdById: actor(ctx),
+        },
       });
-    }
-    await writeAudit(tx, ctx, { action: "CREATE", entityType: "Expense", entityId: expense.id, outletId: data.outletId, after: { amount: data.amount, category: data.category, paidVia: data.paidVia } });
-    return expense;
+      if (data.paidVia === "PETTY_CASH") {
+        await tx.pettyCashTxn.create({
+          data: { organizationId: ctx.organizationId, outletId: data.outletId, type: "EXPENSE", amount: money(-data.amount), category: data.category, reason: data.description ?? `Expense ${expense.id}`, expenseId: expense.id, actorId: actor(ctx) },
+        });
+      }
+      await writeAudit(tx, ctx, { action: "CREATE", entityType: "Expense", entityId: expense.id, outletId: data.outletId, after: { amount: data.amount, category: data.category, paidVia: data.paidVia } });
+      return expense;
+    }),
   });
 }
 
-export async function listExpenses(db: PrismaClient, ctx: AccessContext, filter: { outletId: string; from?: Date; to?: Date; category?: string; take?: number; skip?: number }) {
+/**
+ * Void an expense (the correction path — expenses are never edited): the row
+ * stays, marked voided, and leaves every total. A petty-cash expense returns
+ * its money to the box with an opposite movement. Audited; needs expense.manage
+ * (and, over HTTP, a fresh password confirmation for "finance.void").
+ */
+export async function voidExpense(ctx: AccessContext, expenseId: string, reason: string, db: Client = prisma) {
+  const why = z.string().trim().min(3, "Give a reason").max(500).parse(reason);
+  return runInTx(db, async (tx) => {
+    const e = await tx.expense.findUnique({ where: { id: expenseId } });
+    if (!e || e.organizationId !== ctx.organizationId) throw new NotFoundError("Expense not found");
+    assertOutletAccess(ctx, e.outletId);
+    assertCan(ctx, "expense.manage", e.outletId);
+    if (e.voidedAt) throw new ValidationError("This expense is already void");
+    const updated = await tx.expense.update({ where: { id: expenseId }, data: { voidedAt: new Date(), voidedById: actor(ctx), voidReason: why } });
+    if (e.paidVia === "PETTY_CASH") {
+      await tx.pettyCashTxn.create({
+        data: { organizationId: ctx.organizationId, outletId: e.outletId, type: "ADJUST", amount: money(e.amount), category: e.category, reason: `Void of expense ${e.id}: ${why}`, expenseId: e.id, actorId: actor(ctx) },
+      });
+    }
+    await writeAudit(tx, ctx, { action: "VOID", entityType: "Expense", entityId: expenseId, outletId: e.outletId, before: { amount: num(e.amount), category: e.category }, after: { voided: true, reason: why } });
+    return updated;
+  });
+}
+
+/** Live (non-void) expenses only, unless includeVoided. */
+export async function listExpenses(db: PrismaClient, ctx: AccessContext, filter: { outletId: string; from?: Date; to?: Date; category?: string; take?: number; skip?: number; includeVoided?: boolean }) {
   assertOutletAccess(ctx, filter.outletId);
   assertCan(ctx, "finance.view", filter.outletId);
   const spentAt = filter.from || filter.to ? { gte: filter.from, lte: filter.to } : undefined;
   return db.expense.findMany({
-    where: { organizationId: ctx.organizationId, outletId: filter.outletId, ...(spentAt ? { spentAt } : {}), ...(filter.category ? { category: filter.category } : {}) },
+    where: { organizationId: ctx.organizationId, outletId: filter.outletId, ...(filter.includeVoided ? {} : { voidedAt: null }), ...(spentAt ? { spentAt } : {}), ...(filter.category ? { category: filter.category } : {}) },
     orderBy: { spentAt: "desc" },
     take: Math.min(filter.take ?? 100, 500),
     skip: filter.skip,
   });
 }
 
-/** Expenses grouped by category for an outlet/period (DB-side aggregation). */
+/** Live expenses grouped by category for an outlet/period (DB-side aggregation). */
 export async function expensesByCategory(db: PrismaClient, ctx: AccessContext, filter: { outletId: string; from?: Date; to?: Date }) {
   assertOutletAccess(ctx, filter.outletId);
   assertCan(ctx, "finance.view", filter.outletId);
   const spentAt = filter.from || filter.to ? { gte: filter.from, lte: filter.to } : undefined;
   const grouped = await db.expense.groupBy({
     by: ["category"],
-    where: { organizationId: ctx.organizationId, outletId: filter.outletId, ...(spentAt ? { spentAt } : {}) },
+    where: { organizationId: ctx.organizationId, outletId: filter.outletId, voidedAt: null, ...(spentAt ? { spentAt } : {}) },
     _sum: { amount: true },
     _count: true,
   });
@@ -111,7 +204,7 @@ export async function expensesByCategory(db: PrismaClient, ctx: AccessContext, f
 const pettyCashSchema = z.object({
   outletId: z.string(),
   type: PettyCashType.zod,
-  amount: z.number().positive(),
+  amount: moneyAmount(z.number().positive()),
   /** Only for ADJUST: whether the adjustment adds to or removes from the box. */
   direction: z.enum(["IN", "OUT"]).optional(),
   category: z.string().optional(),
@@ -124,7 +217,7 @@ async function pettyBalanceTx(tx: Tx | PrismaClient, ctx: AccessContext, outletI
   return D(agg._sum.amount ?? 0);
 }
 
-export async function recordPettyCash(ctx: AccessContext, input: z.input<typeof pettyCashSchema>, db: Client = prisma) {
+export async function recordPettyCash(ctx: AccessContext, input: z.input<typeof pettyCashSchema>, db: Client = prisma, idempotencyKey?: string) {
   const data = pettyCashSchema.parse(input);
   assertOutletAccess(ctx, data.outletId);
   assertCan(ctx, "finance.petty_cash", data.outletId);
@@ -133,6 +226,15 @@ export async function recordPettyCash(ctx: AccessContext, input: z.input<typeof 
   // OPENING/ADD are inflows; EXPENSE is an outflow; ADJUST follows its direction.
   const outflow = data.type === "EXPENSE" || (data.type === "ADJUST" && data.direction === "OUT");
   const signed = outflow ? -data.amount : data.amount;
+  return idempotentCreate({
+    key: idempotencyKey,
+    hash: requestHashOf(ctx, "petty-cash", data),
+    findPrior: (key) => prisma.pettyCashTxn.findUnique({ where: { organizationId_idempotencyKey: { organizationId: ctx.organizationId, idempotencyKey: key } } }),
+    create: (key, hash) => recordPettyCashTx(ctx, data, signed, outflow, key, hash, db),
+  });
+}
+
+function recordPettyCashTx(ctx: AccessContext, data: z.infer<typeof pettyCashSchema>, signed: number, outflow: boolean, key: string | null, hash: string | null, db: Client) {
   return runInTx(db, async (tx) => {
     await assertOutletInOrg(tx, ctx, data.outletId);
     if (data.type === "OPENING") {
@@ -144,7 +246,7 @@ export async function recordPettyCash(ctx: AccessContext, input: z.input<typeof 
       if (bal.lt(data.amount)) throw new ValidationError(`Insufficient petty cash: balance ${num(bal)}, requested ${data.amount}`);
     }
     const txn = await tx.pettyCashTxn.create({
-      data: { organizationId: ctx.organizationId, outletId: data.outletId, type: data.type, amount: money(signed), category: data.category, reason: data.reason, attachmentUrl: data.attachmentUrl, actorId: actor(ctx) },
+      data: { organizationId: ctx.organizationId, outletId: data.outletId, type: data.type, amount: money(signed), category: data.category, reason: data.reason, attachmentUrl: data.attachmentUrl, actorId: actor(ctx), idempotencyKey: key, requestHash: hash },
     });
     await writeAudit(tx, ctx, { action: "CREATE", entityType: "PettyCashTxn", entityId: txn.id, outletId: data.outletId, after: { type: data.type, amount: signed } });
     return txn;
@@ -160,7 +262,7 @@ export async function pettyCashBalance(db: PrismaClient, ctx: AccessContext, out
 // ---------------- Cash drawer ----------------
 
 export async function openCashDrawer(ctx: AccessContext, input: { outletId: string; openingFloat: number }, db: Client = prisma) {
-  const data = z.object({ outletId: z.string(), openingFloat: z.number().nonnegative() }).parse(input);
+  const data = z.object({ outletId: z.string(), openingFloat: moneyAmount(z.number().nonnegative()) }).parse(input);
   assertOutletAccess(ctx, data.outletId);
   assertCan(ctx, "payment.take", data.outletId);
   return runInTx(db, async (tx) => {
@@ -182,6 +284,49 @@ async function netCashBetween(tx: Tx | PrismaClient, ctx: AccessContext, outletI
   return D(collected._sum.amount ?? 0).minus(D(refunded._sum.amount ?? 0));
 }
 
+/** Pay-ins minus pay-outs recorded on a drawer session. */
+async function movementsNet(tx: Tx | PrismaClient, sessionId: string) {
+  const rows = await tx.cashDrawerMovement.groupBy({ by: ["type"], where: { sessionId }, _sum: { amount: true } });
+  const sum = (t: string) => D(rows.find((r) => r.type === t)?._sum.amount ?? 0);
+  return { payIn: sum("PAY_IN"), payOut: sum("PAY_OUT") };
+}
+
+/** Cash that should be in the drawer now: float + net cash sales + pay-ins − pay-outs. */
+async function expectedDrawerCash(tx: Tx | PrismaClient, ctx: AccessContext, session: { id: string; outletId: string; openingFloat: unknown; openedAt: Date }, until: Date) {
+  const [net, mv] = await Promise.all([netCashBetween(tx, ctx, session.outletId, session.openedAt, until), movementsNet(tx, session.id)]);
+  return money(D(session.openingFloat as never).plus(net).plus(mv.payIn).minus(mv.payOut));
+}
+
+const movementSchema = z.object({ type: z.enum(["PAY_IN", "PAY_OUT"]), amount: moneyAmount(z.number().positive()), reason: z.string().trim().min(3, "Give a reason").max(300) }).strict();
+
+/**
+ * Non-sale cash into / out of an OPEN drawer (float top-up, a supplier paid
+ * from the till). A pay-out cannot exceed the cash the drawer should hold.
+ * Idempotency-Key: a retried submission returns the original movement.
+ */
+export async function recordDrawerMovement(ctx: AccessContext, sessionId: string, input: z.input<typeof movementSchema>, db: Client = prisma, idempotencyKey?: string) {
+  const data = movementSchema.parse(input);
+  return idempotentCreate({
+    key: idempotencyKey,
+    hash: requestHashOf(ctx, "drawer-movement", { sessionId, ...data }),
+    findPrior: (key) => prisma.cashDrawerMovement.findUnique({ where: { organizationId_idempotencyKey: { organizationId: ctx.organizationId, idempotencyKey: key } } }),
+    create: (key, hash) => runInTx(db, async (tx) => {
+      const session = await tx.cashDrawerSession.findUnique({ where: { id: sessionId } });
+      if (!session || session.organizationId !== ctx.organizationId) throw new NotFoundError("Drawer session not found");
+      assertOutletAccess(ctx, session.outletId);
+      assertCan(ctx, "payment.take", session.outletId);
+      if (session.status !== "OPEN") throw new ValidationError("The drawer session is closed");
+      if (data.type === "PAY_OUT") {
+        const inDrawer = await expectedDrawerCash(tx, ctx, session, new Date(Date.now() + 1));
+        if (inDrawer.lt(data.amount)) throw new ValidationError(`Pay-out ₹${data.amount} exceeds the ₹${num(inDrawer)} the drawer should hold`);
+      }
+      const mv = await tx.cashDrawerMovement.create({ data: { organizationId: ctx.organizationId, outletId: session.outletId, sessionId, type: data.type, amount: money(data.amount), reason: data.reason, actorId: actor(ctx), idempotencyKey: key, requestHash: hash } });
+      await writeAudit(tx, ctx, { action: "CREATE", entityType: "CashDrawerMovement", entityId: mv.id, outletId: session.outletId, after: { sessionId, type: data.type, amount: data.amount, reason: data.reason } });
+      return mv;
+    }),
+  });
+}
+
 export type DrawerCloseResult = {
   session: Awaited<ReturnType<Tx["cashDrawerSession"]["update"]>>;
   expectedCash: number;
@@ -191,23 +336,28 @@ export type DrawerCloseResult = {
 
 /**
  * Close the drawer. Expected cash = opening float + net cash taken during the
- * session. The variance (counted - expected) is returned, audited and, beyond
- * tolerance, raised as a RECONCILIATION_MISMATCH anomaly. (The schema has no
- * expected/variance columns, so they are derived, not stored.)
+ * session + pay-ins − pay-outs; expected and variance (counted − expected) are
+ * frozen on the session, audited and, beyond tolerance, raised as a
+ * RECONCILIATION_MISMATCH anomaly. A retried close with the same count returns
+ * the original result; a different count on a closed session is refused.
  */
 export async function closeCashDrawer(ctx: AccessContext, sessionId: string, closingCount: number, db: Client = prisma): Promise<DrawerCloseResult> {
-  z.number().nonnegative().parse(closingCount);
+  moneyAmount(z.number().nonnegative()).parse(closingCount);
   return runInTx(db, async (tx) => {
     const session = await tx.cashDrawerSession.findUnique({ where: { id: sessionId } });
     if (!session || session.organizationId !== ctx.organizationId) throw new NotFoundError("Drawer session not found");
     assertOutletAccess(ctx, session.outletId);
     assertCan(ctx, "payment.take", session.outletId);
-    if (session.status !== "OPEN") throw new ValidationError("Drawer session is already closed");
+    if (session.status !== "OPEN") {
+      if (session.closingCount !== null && D(session.closingCount).eq(D(closingCount)) && session.expectedCash !== null && session.variance !== null) {
+        return { session, expectedCash: num(session.expectedCash), closingCount, variance: num(session.variance) };
+      }
+      throw new ValidationError("Drawer session is already closed");
+    }
     const closedAt = new Date();
-    const netCash = await netCashBetween(tx, ctx, session.outletId, session.openedAt, new Date(closedAt.getTime() + 1));
-    const expected = money(D(session.openingFloat).plus(netCash));
+    const expected = await expectedDrawerCash(tx, ctx, session, new Date(closedAt.getTime() + 1));
     const variance = money(D(closingCount).minus(expected));
-    const updated = await tx.cashDrawerSession.update({ where: { id: sessionId }, data: { status: "CLOSED", closingCount: money(closingCount), closedAt } });
+    const updated = await tx.cashDrawerSession.update({ where: { id: sessionId }, data: { status: "CLOSED", closingCount: money(closingCount), closedAt, closedById: actor(ctx), expectedCash: expected, variance } });
     await writeAudit(tx, ctx, { action: "UPDATE", entityType: "CashDrawerSession", entityId: sessionId, outletId: session.outletId, before: { status: "OPEN" }, after: { status: "CLOSED", expectedCash: num(expected), closingCount, variance: num(variance) } });
     if (variance.abs().gt(FINANCE_RULES.mismatchTolerance)) {
       await raiseAnomaly(tx, ctx, { type: "RECONCILIATION_MISMATCH", severity: variance.abs().gt(1000) ? "HIGH" : "MEDIUM", outletId: session.outletId, entityType: "CashDrawerSession", entityId: sessionId, message: `Cash drawer variance ₹${num(variance)} (expected ₹${num(expected)}, counted ₹${closingCount})` });
@@ -282,6 +432,10 @@ export type DailyClosing = {
   collections: Array<{ method: string; expected: number }>;
   expenses: number;
   pettyCashNet: number;
+  /** Invoices and credit notes issued that day, and the GST they carry. */
+  invoices: { issued: number; creditNotes: number; taxInvoiced: number; taxCredited: number };
+  /** Drawer sessions closed that day: Σ variance (counted − expected). */
+  drawerVariance: number;
   unsettledOrders: number;
   openDrawers: number;
   reconciliationStatus: string | null;
@@ -302,7 +456,7 @@ export async function dailyClosing(db: PrismaClient, ctx: AccessContext, outletI
   const { start, end } = day;
   const filter: AnalyticsFilter = { outletId, from: start, to: new Date(end.getTime() - 1) };
   const ids = [outletId];
-  const [sales, collections, expenses, petty, unsettled, openDrawers, recon] = await Promise.all([
+  const [sales, collections, expenses, petty, unsettled, openDrawers, recon, invs, drawers] = await Promise.all([
     A.salesSummary(db, ctx, ids, filter),
     expectedByMethod(db, ctx, outletId, day.date),
     A.expensesTotal(db, ctx, ids, filter),
@@ -310,7 +464,10 @@ export async function dailyClosing(db: PrismaClient, ctx: AccessContext, outletI
     db.order.count({ where: { organizationId: ctx.organizationId, outletId, createdAt: { gte: start, lt: end }, status: { notIn: ["PAID", "CANCELLED", "REFUNDED"] } } }),
     db.cashDrawerSession.count({ where: { organizationId: ctx.organizationId, outletId, status: "OPEN" } }),
     db.reconciliation.findUnique({ where: { outletId_businessDate_kind: { outletId, businessDate: day.key, kind: "PAYMENTS" } } }),
+    db.taxInvoice.groupBy({ by: ["kind"], where: { organizationId: ctx.organizationId, outletId, issuedAt: { gte: start, lt: end } }, _count: true, _sum: { totalTax: true } }),
+    db.cashDrawerSession.aggregate({ where: { organizationId: ctx.organizationId, outletId, closedAt: { gte: start, lt: end } }, _sum: { variance: true } }),
   ]);
+  const inv = (k: string) => invs.find((i) => i.kind === k);
   const blockers: string[] = [];
   if (unsettled > 0) blockers.push(`${unsettled} unsettled order(s)`);
   if (openDrawers > 0) blockers.push(`${openDrawers} open cash drawer session(s)`);
@@ -322,6 +479,8 @@ export async function dailyClosing(db: PrismaClient, ctx: AccessContext, outletI
     collections,
     expenses,
     pettyCashNet: num(money(D(petty._sum.amount ?? 0))),
+    invoices: { issued: inv("INVOICE")?._count ?? 0, creditNotes: inv("CREDIT_NOTE")?._count ?? 0, taxInvoiced: num(money(D(inv("INVOICE")?._sum.totalTax ?? 0))), taxCredited: num(money(D(inv("CREDIT_NOTE")?._sum.totalTax ?? 0))) },
+    drawerVariance: num(money(D(drawers._sum.variance ?? 0))),
     unsettledOrders: unsettled,
     openDrawers,
     reconciliationStatus: recon?.status ?? null,
@@ -348,7 +507,10 @@ export type PnL = {
   grossMargin: number;
   marginPct: number;
   netProfit: number;
-  payments: Array<{ method: string; amount: number; count: number }>;
+  /** Per method: collected, refunded and net (= amount). */
+  payments: PaymentMethodRow[];
+  /** Ex-tax part of the refunds (what netSales subtracts). */
+  refundsExTax: number;
 };
 
 /**
@@ -377,6 +539,7 @@ export async function computePnL(db: PrismaClient, ctx: AccessContext, filter: A
     discounts: summary.discounts,
     taxes: summary.taxes,
     refunds: summary.refunds,
+    refundsExTax: summary.refundsExTax,
     netSales: summary.netSales,
     theoreticalFoodCost: fc,
     wastage: waste,

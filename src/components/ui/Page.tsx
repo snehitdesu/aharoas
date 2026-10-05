@@ -18,7 +18,7 @@ export function PageHeader({ title, subtitle, back, actions, badge }: { title: R
           </Link>
         )}
         <div className="flex flex-wrap items-center gap-2.5">
-          <h1 className="text-[1.35rem] font-semibold leading-tight tracking-[-0.02em] text-ink-900">{title}</h1>
+          <h1 className="font-display text-[1.7rem] font-semibold leading-[1.15] text-ink-900 sm:text-[1.9rem]">{title}</h1>
           {badge}
         </div>
         {subtitle && <p className="mt-1 text-sm text-ink-500">{subtitle}</p>}
@@ -34,7 +34,7 @@ export function SubNav({ items, label }: { items: Array<{ href: string; label: s
   const visible = items.filter((i) => !i.hidden);
   if (visible.length < 2) return null;
   return (
-    <nav aria-label={label} className="mb-5 flex gap-1 overflow-x-auto border-b border-ink-200">
+    <nav aria-label={label} className="mb-5 flex gap-1 overflow-x-auto overflow-y-hidden border-b border-ink-200">
       {visible.map((i) => {
         const active = pathname === i.href;
         return (
@@ -50,7 +50,7 @@ export function SubNav({ items, label }: { items: Array<{ href: string; label: s
 /** In-page tabs (state-based). */
 export function Tabs<T extends string>({ value, onChange, options, label }: { value: T; onChange: (v: T) => void; options: Array<{ value: T; label: string; hidden?: boolean }>; label: string }) {
   return (
-    <div role="tablist" aria-label={label} className="mb-4 flex gap-1 overflow-x-auto border-b border-ink-200">
+    <div role="tablist" aria-label={label} className="mb-4 flex gap-1 overflow-x-auto overflow-y-hidden border-b border-ink-200">
       {options.filter((o) => !o.hidden).map((o) => (
         <button key={o.value} type="button" role="tab" aria-selected={value === o.value} onClick={() => onChange(o.value)} className={`-mb-px whitespace-nowrap border-b-2 px-3 py-2 text-sm transition-colors ${value === o.value ? "border-brand-500 font-semibold text-brand-700" : "border-transparent font-medium text-ink-500 hover:border-ink-300 hover:text-ink-800"}`}>
           {o.label}
@@ -62,10 +62,10 @@ export function Tabs<T extends string>({ value, onChange, options, label }: { va
 
 export function Card({ title, actions, children, className = "", bodyClassName = "p-4" }: { title?: ReactNode; actions?: ReactNode; children: ReactNode; className?: string; bodyClassName?: string }) {
   return (
-    <section className={`rounded-xl border border-ink-200 bg-white shadow-card ${className}`}>
+    <section className={`rounded-lg border border-ink-200 bg-paper shadow-card ${className}`}>
       {(title || actions) && (
         <div className="flex items-center justify-between gap-2 border-b border-ink-200 px-4 py-3">
-          {title && <h2 className="text-sm font-semibold tracking-[-0.01em] text-ink-900">{title}</h2>}
+          {title && <h2 className="text-[1.02rem] font-semibold text-ink-900">{title}</h2>}
           {actions && <div className="flex items-center gap-2">{actions}</div>}
         </div>
       )}
@@ -83,7 +83,7 @@ export function Details({ items, cols = 3 }: { items: Array<[ReactNode, ReactNod
         const [k, v] = it as [ReactNode, ReactNode];
         return (
           <div key={i} className="min-w-0">
-            <dt className="text-[11px] font-semibold uppercase tracking-wider text-ink-500">{k}</dt>
+            <dt className="eyebrow">{k}</dt>
             <dd className="mt-1 break-words text-sm text-ink-900">{v ?? "—"}</dd>
           </div>
         );
@@ -94,9 +94,9 @@ export function Details({ items, cols = 3 }: { items: Array<[ReactNode, ReactNod
 
 export function Stat({ label, value, hint, tone }: { label: string; value: ReactNode; hint?: ReactNode; tone?: "bad" | "ok" }) {
   return (
-    <div className="rounded-xl border border-ink-200 bg-white p-4 shadow-card">
-      <p className="text-[11px] font-semibold uppercase tracking-wider text-ink-500">{label}</p>
-      <p className={`mt-1.5 text-2xl font-semibold tabular-nums tracking-[-0.02em] ${tone === "bad" ? "text-bad-600" : tone === "ok" ? "text-ok-600" : "text-ink-900"}`}>{value}</p>
+    <div className="rounded-lg border border-ink-200 bg-paper p-4 shadow-card">
+      <p className="eyebrow">{label}</p>
+      <p className={`mt-1.5 font-display text-[1.65rem] font-semibold tabular-nums leading-8 ${tone === "bad" ? "text-bad-600" : tone === "ok" ? "text-ok-600" : "text-ink-900"}`}>{value}</p>
       {hint && <p className="mt-1 text-xs text-ink-500">{hint}</p>}
     </div>
   );
@@ -127,22 +127,22 @@ const METRIC_ICON: Record<MetricTone, string> = {
 export function MetricCard({ label, value, hint, icon, tone = "neutral", emphasis = false, href }: { label: string; value: ReactNode; hint?: ReactNode; icon?: IconName; tone?: MetricTone; emphasis?: boolean; href?: string }) {
   const body = (
     <div
-      className={`relative overflow-hidden rounded-xl border bg-white p-4 shadow-card transition-shadow before:absolute before:inset-y-0 before:left-0 before:w-1 before:content-[''] ${METRIC_ACCENT[tone]} ${emphasis ? "border-ink-300 sm:p-5" : "border-ink-200"} ${href ? "hover:shadow-raised" : ""}`}
+      className={`relative overflow-hidden rounded-lg border bg-paper p-4 transition-[box-shadow,transform] before:absolute before:inset-y-0 before:left-0 before:w-1 before:content-[''] ${METRIC_ACCENT[tone]} ${emphasis ? "border-ink-900 shadow-print sm:p-5" : "border-ink-200 shadow-card"} ${href ? (emphasis ? "hover:-translate-y-px" : "hover:shadow-raised") : ""}`}
     >
       <div className="flex items-start justify-between gap-3 pl-1.5">
-        <p className="text-[11px] font-semibold uppercase tracking-wider text-ink-500">{label}</p>
+        <p className="eyebrow">{label}</p>
         {icon && (
-          <span className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${METRIC_ICON[tone]}`}>
+          <span className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md ${METRIC_ICON[tone]}`}>
             <Icon name={icon} className="h-4 w-4" />
           </span>
         )}
       </div>
-      <p className={`mt-1.5 pl-1.5 font-semibold tabular-nums tracking-[-0.02em] text-ink-900 ${emphasis ? "text-[1.75rem] leading-8" : "text-2xl"}`}>{value}</p>
+      <p className={`mt-1.5 pl-1.5 font-display font-semibold tabular-nums text-ink-900 ${emphasis ? "text-[2.1rem] leading-[2.4rem]" : "text-[1.65rem] leading-8"}`}>{value}</p>
       {hint && <p className="mt-1 pl-1.5 text-xs text-ink-500">{hint}</p>}
     </div>
   );
   return href ? (
-    <Link href={href} className="block rounded-xl outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-500">
+    <Link href={href} className="block rounded-lg outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-500">
       {body}
     </Link>
   ) : (

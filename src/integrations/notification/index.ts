@@ -31,7 +31,8 @@ export class MockNotificationProvider implements NotificationProvider {
   }
   async send(msg: OutboundNotification): Promise<SendResult> {
     if (process.env.NODE_ENV !== "test") {
-      console.log(`[notify:mock] ${msg.channel} -> ${msg.to}: ${msg.title}`);
+      // Destination masked: logs never carry a full phone number / address.
+      console.log(`[notify:mock] ${msg.channel} -> ${msg.to.length > 4 ? `***${msg.to.slice(-4)}` : "***"}: ${msg.title}`);
     }
     return { delivered: true, providerRef: `mock_${Date.now()}` };
   }

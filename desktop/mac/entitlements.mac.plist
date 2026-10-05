@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Hardened-runtime entitlements for RESTORA on macOS (app and its helper /
+  utility processes). Only what Electron needs to run:
+  - allow-jit / allow-unsigned-executable-memory: V8's JIT.
+  - disable-library-validation: the utility processes (Next.js server, DB tool)
+    load native Node-API modules from Contents/Resources/server (Prisma's query
+    engine, sharp) that are not part of the Electron framework.
+  No sandbox, network-server, camera, microphone or file-access entitlements are
+  granted: the server listens on 127.0.0.1 only and the renderer is sandboxed by
+  Electron itself (app.enableSandbox()).
+-->
+<plist version="1.0">
+  <dict>
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+  </dict>
+</plist>

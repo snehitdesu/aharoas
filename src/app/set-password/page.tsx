@@ -1,7 +1,7 @@
 import { AuthShell } from "@/components/layout/AuthShell";
 import { SetPasswordForm } from "./SetPasswordForm";
 
-export const metadata = { title: "Set your password — Aharos" };
+export const metadata = { title: "Set your password — RESTORA" };
 
 /**
  * Landing page for one-time setup / reset links: /set-password#token=…
@@ -10,7 +10,7 @@ export const metadata = { title: "Set your password — Aharos" };
  */
 export default function SetPasswordPage() {
   return (
-    <AuthShell title="Set your password" subtitle="Choose a password for your Aharos account">
+    <AuthShell title="Set your password" subtitle="Choose a password for your RESTORA account">
       <SetPasswordForm />
     </AuthShell>
   );

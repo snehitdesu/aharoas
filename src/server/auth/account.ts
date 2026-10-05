@@ -3,6 +3,7 @@
  * password. Transport-agnostic (route handlers add origin checks, body caps and
  * rate limits). Raw passwords and raw tokens are never logged or audited.
  */
+import { log } from "@/server/observability/log";
 import type { PrismaClient } from "@prisma/client";
 import { z } from "zod";
 import { passwordProblems, PASSWORD_MAX_BYTES } from "@/constants/password";
@@ -100,7 +101,7 @@ export async function requestPasswordReset(db: PrismaClient, input: z.input<type
   try {
     await send({ to: user.email, name: user.name, token: issued.token, expiresAt: issued.expiresAt });
   } catch (e) {
-    console.error("[auth] password reset delivery failed for user", user.id, (e as Error)?.message ?? "unknown error");
+    log.error("password reset delivery failed", { event: "password_reset_delivery_failed", userId: user.id, error: e });
   }
 }
 

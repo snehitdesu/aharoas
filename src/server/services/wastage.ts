@@ -23,6 +23,7 @@ import { writeAudit } from "@/server/audit/log";
 import { appendLedger, currentQuantity, getAvgCost } from "@/server/services/inventory";
 import { convertToBase } from "@/server/services/recipe";
 import { type Client, type Tx, runInTx, assertTransition, nextNumber } from "@/server/services/_workflow";
+import { idempotentCreate, requestHashOf } from "@/server/services/idempotency";
 import { D, dMul, money, num, qty as roundQty } from "@/domain/money";
 
 export const WASTAGE_RULES = { approvalThreshold: 2000 };
@@ -42,15 +43,24 @@ const createSchema = z.object({
   departmentId: z.string().optional(),
   reason: WastageReason.zod,
   notes: z.string().max(1000).optional(),
-  lines: z.array(z.object({ materialId: z.string(), qty: z.number().positive(), unitId: z.string().optional() })).min(1),
+  lines: z.array(z.object({ materialId: z.string(), qty: z.number().positive().max(1_000_000_000), unitId: z.string().optional() })).min(1).max(200),
 });
 
-export async function createWastage(ctx: AccessContext, input: z.input<typeof createSchema>, db: Client = prisma) {
+export async function createWastage(ctx: AccessContext, input: z.input<typeof createSchema>, db: Client = prisma, idempotencyKey?: string) {
   const data = createSchema.parse(input);
   assertOutletAccess(ctx, data.outletId);
   assertCan(ctx, "inventory.wastage", data.outletId);
   const ids = data.lines.map((l) => l.materialId);
   if (new Set(ids).size !== ids.length) throw new ValidationError("Each material may appear only once per wastage document");
+  return idempotentCreate({
+    key: idempotencyKey,
+    hash: requestHashOf(ctx, "wastage", data),
+    findPrior: (key) => prisma.wastage.findUnique({ where: { organizationId_idempotencyKey: { organizationId: ctx.organizationId, idempotencyKey: key } }, include: { lines: true } }),
+    create: (key, hash) => createWastageTx(ctx, data, key, hash, db),
+  });
+}
+
+function createWastageTx(ctx: AccessContext, data: z.infer<typeof createSchema>, key: string | null, hash: string | null, db: Client) {
   return runInTx(db, async (tx) => {
     if (data.departmentId) {
       const dept = await tx.department.findUnique({ where: { id: data.departmentId } });
@@ -63,7 +73,7 @@ export async function createWastage(ctx: AccessContext, input: z.input<typeof cr
     }
     const number = await nextNumber(tx, tx.wastage, { outletId: data.outletId }, "WST");
     const doc = await tx.wastage.create({
-      data: { organizationId: ctx.organizationId, outletId: data.outletId, departmentId: data.departmentId, number, reason: data.reason, status: "DRAFT", notes: data.notes, createdById: actor(ctx), lines: { create: lines } },
+      data: { organizationId: ctx.organizationId, outletId: data.outletId, departmentId: data.departmentId, number, reason: data.reason, status: "DRAFT", notes: data.notes, createdById: actor(ctx), idempotencyKey: key, requestHash: hash, lines: { create: lines } },
       include: { lines: true },
     });
     await writeAudit(tx, ctx, { action: "CREATE", entityType: "Wastage", entityId: doc.id, outletId: data.outletId, after: { reason: data.reason, lines: lines.length } });

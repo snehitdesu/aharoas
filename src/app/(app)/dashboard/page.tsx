@@ -13,7 +13,7 @@ import { formatMoney } from "@/lib/format";
 import { Badge } from "@/components/ui/Badge";
 
 export const dynamic = "force-dynamic";
-export const metadata = { title: "Dashboard — Aharos" };
+export const metadata = { title: "Dashboard — RESTORA" };
 
 type Tile<T> = { ok: true; value: T } | { ok: false } | null;
 
@@ -30,9 +30,9 @@ async function tile<T>(allowed: boolean, fn: () => Promise<T>): Promise<Tile<T>>
 function Stat({ label, value, hint, emphasis = false, tone = "brand" }: { label: string; value: React.ReactNode; hint?: string; emphasis?: boolean; tone?: "brand" | "accent" | "ok" | "warn" | "bad" | "neutral" }) {
   const rail = { brand: "before:bg-brand-500", accent: "before:bg-vanilla-300", ok: "before:bg-ok-500", warn: "before:bg-warn-500", bad: "before:bg-bad-500", neutral: "before:bg-ink-300" }[tone];
   return (
-    <div className={`relative overflow-hidden rounded-xl border bg-white p-4 shadow-card before:absolute before:inset-y-0 before:left-0 before:w-1 before:content-[''] ${rail} ${emphasis ? "border-ink-300 sm:p-5" : "border-ink-200"}`}>
-      <p className="pl-1.5 text-[11px] font-semibold uppercase tracking-wider text-ink-500">{label}</p>
-      <p className={`mt-1.5 pl-1.5 font-semibold tabular-nums tracking-[-0.02em] text-ink-900 ${emphasis ? "text-[1.75rem] leading-8" : "text-2xl"}`}>{value}</p>
+    <div className={`relative overflow-hidden rounded-lg border bg-paper p-4 before:absolute before:inset-y-0 before:left-0 before:w-1 before:content-[''] ${rail} ${emphasis ? "border-ink-900 shadow-print sm:p-5" : "border-ink-200 shadow-card"}`}>
+      <p className="eyebrow pl-1.5">{label}</p>
+      <p className={`mt-1.5 pl-1.5 font-display font-semibold tabular-nums text-ink-900 ${emphasis ? "text-[2.1rem] leading-[2.4rem]" : "text-[1.65rem] leading-8"}`}>{value}</p>
       {hint && <p className="mt-1 pl-1.5 text-xs text-ink-500">{hint}</p>}
     </div>
   );
@@ -65,8 +65,8 @@ export default async function DashboardPage() {
     <div className="space-y-6">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-brand-700">Today&apos;s operations</p>
-          <h1 className="text-xl font-semibold tracking-tight">{outlet.name}</h1>
+          <p className="eyebrow !text-brand-700">Today&apos;s operations</p>
+          <h1 className="font-display text-[1.9rem] font-semibold leading-tight">{outlet.name}</h1>
           <p className="text-sm text-ink-500">Business day {today.date} · {outlet.timezone}</p>
         </div>
         <div className="flex gap-2">
@@ -75,8 +75,13 @@ export default async function DashboardPage() {
               Open POS
             </Link>
           )}
+          {has.has("order.create") && (
+            <Link href="/captain" className="inline-flex h-10 items-center rounded-md border border-ink-300 bg-paper px-4 text-sm font-medium text-ink-800 shadow-xs hover:bg-ink-50">
+              Captain app
+            </Link>
+          )}
           {has.has("kot.view") && (
-            <Link href="/kitchen" className="inline-flex h-10 items-center rounded-md border border-ink-300 bg-white px-4 text-sm font-medium text-ink-800 shadow-xs hover:bg-ink-50">
+            <Link href="/kitchen" className="inline-flex h-10 items-center rounded-md border border-ink-300 bg-paper px-4 text-sm font-medium text-ink-800 shadow-xs hover:bg-ink-50">
               Kitchen display
             </Link>
           )}
@@ -84,7 +89,7 @@ export default async function DashboardPage() {
       </div>
 
       <section aria-label="Today" className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        {sales && <Stat emphasis tone="accent" label="Net sales today" value={sales.ok ? formatMoney(sales.value.netSales) : unavailable} hint={sales.ok ? `${sales.value.orders} paid orders · AOV ${formatMoney(sales.value.aov)}` : undefined} />}
+        {sales && <Stat emphasis tone="accent" label="Net sales today" value={sales.ok ? formatMoney(sales.value.netSales) : unavailable} hint={sales.ok ? `${sales.value.orders} settled orders · AOV ${formatMoney(sales.value.aov)}` : undefined} />}
         {openOrderCount && <Stat tone="brand" label="Open orders" value={openOrderCount.ok ? openOrderCount.value : unavailable} hint="Not yet paid or cancelled" />}
         {kitchen && <Stat tone={kitchen.ok && kitchen.value.ready > 0 ? "ok" : "brand"} label="Kitchen tickets" value={kitchen.ok ? kitchen.value.total : unavailable} hint={kitchen.ok ? `${kitchen.value.ready} ready to serve` : undefined} />}
         {openBookings && <Stat tone="neutral" label="Reservations today" value={openBookings.ok ? openBookings.value : unavailable} hint="Booked, confirmed or seated" />}
@@ -92,14 +97,14 @@ export default async function DashboardPage() {
 
       {(sales || tables || stockAlerts) && (
         <section aria-label="Supporting metrics" className="grid grid-cols-2 gap-3 lg:grid-cols-3">
-          {sales && <Stat tone="accent" label="Average order value" value={sales.ok ? formatMoney(sales.value.aov) : unavailable} hint="Paid orders today" />}
+          {sales && <Stat tone="accent" label="Average order value" value={sales.ok ? formatMoney(sales.value.aov) : unavailable} hint="Settled orders today" />}
           {tables && <Stat tone="ok" label="Open tables" value={tables.ok ? `${availableTables} / ${tables.value.length}` : unavailable} hint="Available now" />}
           {stockAlerts && <Stat tone={stockAlerts.ok && stockAlerts.value.length > 0 ? "warn" : "ok"} label="Low stock" value={stockAlerts.ok ? stockAlerts.value.length : unavailable} hint="At or below reorder level" />}
         </section>
       )}
 
       {anomalies && (
-        <section aria-labelledby="anomalies-h" className="rounded-xl border border-ink-200 bg-white shadow-card">
+        <section aria-labelledby="anomalies-h" className="rounded-xl border border-ink-200 bg-paper shadow-card">
           <h2 id="anomalies-h" className="border-b border-ink-200 px-4 py-2.5 text-sm font-semibold tracking-[-0.01em]">Open anomalies</h2>
           {!anomalies.ok ? (
             <p className="px-4 py-3 text-sm text-bad-500">Couldn&apos;t load anomalies.</p>

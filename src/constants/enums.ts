@@ -28,6 +28,8 @@ export const Role = makeEnum([
   "KITCHEN",
   "CAPTAIN",
   "CASHIER",
+  // Finance / accounts staff: books, payables, reconciliation and reports — no POS or stock changes.
+  "ACCOUNTANT",
   "CUSTOMER",
   "SUPER_ADMIN",
 ] as const);
@@ -156,6 +158,17 @@ export const WastageReason = makeEnum([
 ] as const);
 export type WastageReason = (typeof WastageReason.values)[number];
 
+/** Why stock was adjusted by hand (losses of usable stock go through wastage instead). */
+export const AdjustmentReason = makeEnum([
+  "COUNT_CORRECTION",
+  "FOUND",
+  "THEFT_OR_LOSS",
+  "DATA_ENTRY_ERROR",
+  "RETURN_TO_VENDOR",
+  "OTHER",
+] as const);
+export type AdjustmentReason = (typeof AdjustmentReason.values)[number];
+
 // --- Procurement ---
 export const PurchaseOrderStatus = makeEnum([
   "DRAFT",
@@ -279,6 +292,11 @@ export const AuditAction = makeEnum([
   "EXPORT_DENIED",
   "EXPORT_DOWNLOADED",
   "EXPORT_PURGED",
+  // Phase 7 integrations
+  "PRINT",
+  "DRAWER_OPEN",
+  "MESSAGE_SEND",
+  "INTEGRATION_SYNC",
 ] as const);
 export type AuditAction = (typeof AuditAction.values)[number];
 
@@ -318,7 +336,8 @@ export const PURCHASE_ORDER_TRANSITIONS: Record<PurchaseOrderStatus, PurchaseOrd
   SUBMITTED: ["APPROVED", "CANCELLED"],
   APPROVED: ["ORDERED", "CANCELLED"],
   ORDERED: ["PARTIAL", "RECEIVED", "CANCELLED"],
-  PARTIAL: ["RECEIVED", "CLOSED", "CANCELLED"],
+  // Received stock cannot be "cancelled" away: a part-received PO is short-closed.
+  PARTIAL: ["RECEIVED", "CLOSED"],
   RECEIVED: ["BILLED", "CLOSED"],
   BILLED: ["CLOSED"],
   CLOSED: [],
@@ -349,8 +368,9 @@ export const GRN_TRANSITIONS: Record<GRNStatus, GRNStatus[]> = {
 
 export const PURCHASE_BILL_TRANSITIONS: Record<PurchaseBillStatus, PurchaseBillStatus[]> = {
   OPEN: ["PARTIAL", "PAID", "CANCELLED"],
-  PARTIAL: ["PAID", "CANCELLED"],
-  PAID: [],
+  // -> OPEN / PARTIAL only by reversing a payment (vendorFinance.reverseVendorPayment).
+  PARTIAL: ["PAID", "OPEN", "CANCELLED"],
+  PAID: ["PARTIAL", "OPEN"],
   CANCELLED: [],
 };
 

@@ -18,6 +18,7 @@ export default defineConfig({
   test: {
     environment: "node",
     globalSetup: ["./vitest.global-setup.ts"],
+    setupFiles: ["./tests/setup-after-commit.ts"],
     env: {
       DATABASE_URL: testDbUrl,
     },

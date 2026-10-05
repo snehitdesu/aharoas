@@ -6,7 +6,11 @@ import { Icon } from "@/components/ui/Icon";
 /**
  * Accessible modal dialog: role="dialog", aria-modal, labelled by its title,
  * focus moved inside on open and restored on close, Tab trapped, Esc closes.
+ * When dialogs stack (e.g. the password confirmation over a confirm dialog),
+ * only the topmost one reacts to Esc/Tab.
  */
+const openStack: object[] = [];
+
 export function Dialog({
   open,
   onClose,
@@ -34,11 +38,14 @@ export function Dialog({
 
   useEffect(() => {
     if (!open) return;
+    const me = {};
+    openStack.push(me);
     const previous = document.activeElement as HTMLElement | null;
     const node = panel.current;
     const focusables = () => Array.from(node?.querySelectorAll<HTMLElement>('button:not([disabled]), [href], input:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"])') ?? []);
     (focusables().find((el) => el.dataset.autofocus !== undefined) ?? focusables()[0] ?? node)?.focus();
     const onKey = (e: KeyboardEvent) => {
+      if (openStack[openStack.length - 1] !== me) return;
       if (e.key === "Escape") {
         e.stopPropagation();
         onCloseRef.current();
@@ -59,6 +66,7 @@ export function Dialog({
     document.addEventListener("keydown", onKey);
     return () => {
       document.removeEventListener("keydown", onKey);
+      openStack.splice(openStack.indexOf(me), 1);
       previous?.focus?.();
     };
   }, [open]);
@@ -66,11 +74,11 @@ export function Dialog({
   if (!open) return null;
   const width = size === "sm" ? "max-w-sm" : size === "lg" ? "max-w-3xl" : "max-w-lg";
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink-900/40 p-4" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div ref={panel} role="dialog" aria-modal="true" aria-labelledby={titleId} aria-describedby={description ? descId : undefined} tabIndex={-1} className={`flex max-h-[90vh] w-full ${width} flex-col rounded-xl bg-white shadow-pop outline-none animate-scale-in`}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-espresso/45 p-4 backdrop-blur-[2px]" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div ref={panel} role="dialog" aria-modal="true" aria-labelledby={titleId} aria-describedby={description ? descId : undefined} tabIndex={-1} className={`flex max-h-[90vh] w-full ${width} flex-col overflow-hidden rounded-lg border border-ink-900 border-t-4 border-t-brand-500 bg-paper shadow-print outline-none animate-scale-in`}>
         <div className="flex items-start justify-between gap-4 border-b border-ink-200 px-5 py-3">
           <div>
-            <h2 id={titleId} className="text-base font-semibold text-ink-900">{title}</h2>
+            <h2 id={titleId} className="text-[1.2rem] font-semibold leading-snug text-ink-900">{title}</h2>
             {description && <p id={descId} className="mt-0.5 text-sm text-ink-500">{description}</p>}
           </div>
           <button type="button" onClick={onClose} className="rounded p-1 text-ink-500 hover:bg-ink-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-500" aria-label="Close dialog">
@@ -78,7 +86,7 @@ export function Dialog({
           </button>
         </div>
         <div className="overflow-y-auto px-5 py-4">{children}</div>
-        {footer && <div className="flex justify-end gap-2 border-t border-ink-200 px-5 py-3">{footer}</div>}
+        {footer && <div className="flex justify-end gap-2 border-t border-ink-200 bg-paper-warm px-5 py-3">{footer}</div>}
       </div>
     </div>
   );

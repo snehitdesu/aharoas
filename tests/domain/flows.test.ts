@@ -13,6 +13,7 @@ import { explodeRecipe, assertNoCycleOnAdd } from "@/server/services/recipe";
 import { createOrder, addOrderItem, submitOrder } from "@/server/services/orders";
 import { createPayment, verifyPayment, refundPayment } from "@/server/services/payment";
 import { receivePOSWebhook } from "@/server/services/pos";
+import { bindWebhook } from "./webhookBinding";
 import { MockPOSProvider } from "@/integrations/pos";
 import { RecipeCycleError } from "@/domain/recipe/cycle";
 import { num } from "@/domain/money";
@@ -68,6 +69,12 @@ beforeAll(async () => {
 
 afterAll(async () => { await prisma.$disconnect(); });
 
+
+// H4 tenant binding for the provider account used below.
+beforeAll(async () => {
+  await bindWebhook({ kind: "POS", provider: "mock", organizationId: orgId, outletId: outletA, externalRef: outletA });
+});
+
 describe("purchase -> inventory", () => {
   it("increases on-hand and sets weighted-average cost", async () => {
     expect(num(await currentQuantity(prisma, ctx, outletA, mChicken))).toBe(50);
@@ -109,7 +116,7 @@ describe("POS webhook idempotency", () => {
   it("does not consume stock twice for a duplicate webhook", async () => {
     const provider = new MockPOSProvider();
     const payload = {
-      eventId: `EVT-${RUN}`, externalRef: `EXT-${RUN}`, outletId: outletA, source: "PETPOOJA", channel: "AGGREGATOR",
+      eventId: `EVT-${RUN}`, externalRef: `EXT-${RUN}`, storeId: outletA, outletId: outletA, source: "PETPOOJA", channel: "AGGREGATOR",
       items: [{ posItemCode: `BIR-${RUN}`, name: "Biryani", qty: 2, unitPrice: 300, taxPct: 5 }],
       settled: true,
     };

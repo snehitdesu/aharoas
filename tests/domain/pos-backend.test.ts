@@ -8,9 +8,10 @@ import { systemContext } from "@/server/auth/context";
 import { type AccessContext, ConflictError, ValidationError } from "@/server/db/scope";
 import { placeOrder, listOrders, getOrder, countOrders } from "@/server/services/orders";
 import { createPayment, verifyPayment } from "@/server/services/payment";
-import { listKOTs, listStations } from "@/server/services/kot";
+import { listKOTs, listStations, KDS_MAX_TICKETS } from "@/server/services/kot";
 import { createMenuItem, createModifierGroup, addModifierOption, attachModifierGroup } from "@/server/services/menu";
 import { createCustomer } from "@/server/services/crm";
+import { processPOSOrder } from "@/server/services/pos";
 
 const RUN = Date.now().toString(36);
 let orgId: string, outletId: string, tableId: string, dosa: string, pizza: string, spice: string, ctx: AccessContext, captain: AccessContext;
@@ -123,5 +124,41 @@ describe("KDS data", () => {
     expect(pizzaLine.orderItem?.modifiers.map((m) => m.name)).toEqual([`Spice ${RUN}: Hot`]);
     expect(pizzaLine.orderItem?.notes).toBe("extra hot");
     expect((await listStations(prisma, captain, outletId)).map((s) => s.name)).toEqual(["KITCHEN"]);
+  });
+
+  it("a board with more live tickets than it loads keeps the NEWEST (stale, never-bumped tickets fall off — never a new order)", async () => {
+    // A kitchen working from printed KOTs never bumps its tickets: after a few days hundreds are "live".
+    const outlet2 = (await prisma.outlet.create({ data: { organizationId: orgId, code: `PK${RUN}`, name: "Busy" } })).id;
+    const stale = await prisma.order.create({ data: { organizationId: orgId, outletId: outlet2, channel: "TAKEAWAY", source: "POS", status: "SENT" } });
+    const old = new Date(Date.now() - 3 * 864e5);
+    await prisma.kot.createMany({ data: Array.from({ length: KDS_MAX_TICKETS + 5 }, (_, i) => ({ organizationId: orgId, outletId: outlet2, orderId: stale.id, number: 9_000_000 + i, status: "NEW", createdAt: new Date(old.getTime() + i * 1000) })) });
+    const fresh = await placeOrder(ctx, { outletId: outlet2, channel: "TAKEAWAY", submit: true, items: [{ menuItemId: dosa, qty: 1 }] });
+    const board = await listKOTs(prisma, ctx, { outletId: outlet2 });
+    expect(board).toHaveLength(KDS_MAX_TICKETS);
+    expect(board.at(-1)!.orderId).toBe(fresh.id); // newest, shown last (oldest first)
+    expect(board.every((k, i) => i === 0 || k.createdAt >= board[i - 1].createdAt)).toBe(true);
+  });
+});
+
+describe("processPOSOrder under concurrency (PostgreSQL READ COMMITTED would lose updates)", () => {
+  it("concurrent settled orders for one customer + one unmapped item keep the loyalty cache and unmapped qty exact", async () => {
+    const phone = `98${Date.now().toString().slice(-8)}`;
+    const customer = await createCustomer(ctx, { name: "Regular", phone });
+    const code = `UNMAPPED-${RUN}`;
+    const N = 4;
+    const results = await Promise.allSettled(
+      Array.from({ length: N }, (_, i) => processPOSOrder(ctx, {
+        externalRef: `conc-${i}-${RUN}`, eventId: `conc-ev-${i}-${RUN}`, outletId, source: "PETPOOJA", channel: "DINE_IN", placedAt: new Date(),
+        items: [{ posItemCode: code, name: "Mystery thali", qty: 2, unitPrice: 500, taxPct: 0 }],
+        payments: [{ method: "UPI", amount: 1000, providerRef: `conc-rp-${i}-${RUN}` }], settled: true, customer: { phone },
+      }))
+    );
+    expect(results.filter((r) => r.status === "rejected").map((r) => String((r as PromiseRejectedResult).reason))).toEqual([]);
+    const ledger = await prisma.loyaltyTransaction.aggregate({ where: { customerId: customer.id }, _sum: { points: true }, _count: true });
+    expect(ledger._count).toBe(N);
+    const account = await prisma.loyaltyAccount.findUniqueOrThrow({ where: { customerId: customer.id } });
+    expect(account.pointsBalance).toBe(ledger._sum.points);
+    const unmapped = await prisma.unmappedSale.findFirstOrThrow({ where: { outletId, posCode: code } });
+    expect(Number(unmapped.qty)).toBe(2 * N);
   });
 });

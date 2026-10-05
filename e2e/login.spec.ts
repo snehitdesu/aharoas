@@ -4,7 +4,8 @@ import { PASSWORD, ROLES, appAlert } from "./helpers";
 test.describe("authentication", () => {
   test("LOGIN-001 manager signs in and reaches dashboard, POS and KDS", async ({ page }) => {
     await page.goto("/login");
-    await expect(page.getByRole("heading", { name: "Aharos" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Welcome back" })).toBeVisible();
+    await expect(page.getByLabel("RESTORA")).toBeVisible();
     await page.getByLabel("Email").fill(ROLES.manager);
     await page.getByLabel("Password").fill(PASSWORD);
     await page.getByRole("button", { name: "Sign in" }).click();

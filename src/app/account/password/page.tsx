@@ -4,7 +4,7 @@ import { AuthShell } from "@/components/layout/AuthShell";
 import { ChangePasswordForm } from "./ChangePasswordForm";
 
 export const dynamic = "force-dynamic";
-export const metadata = { title: "Change password — Aharos" };
+export const metadata = { title: "Change password — RESTORA" };
 
 export default async function ChangePasswordPage() {
   const { shell } = await requireShell("/account/password");

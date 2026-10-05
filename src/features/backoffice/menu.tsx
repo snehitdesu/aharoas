@@ -27,12 +27,13 @@ import { ActiveBadge, Card, Details, PageHeader, Stat } from "@/components/ui/Pa
 import { EmptyState, ErrorState, LoadingState } from "@/components/ui/States";
 import { FilterBar, SearchInput, SelectFilter } from "@/components/ui/Filters";
 import { ActionButton } from "@/components/ui/Confirm";
+import { MaterialSelect, useMaterials, useUnits } from "@/features/backoffice/lookups";
 
 type Num = string | number;
 export type MenuCategory = { id: string; name: string; sortOrder: number; active: boolean };
-export type ModifierOption = { id: string; groupId: string; name: string; priceDelta: Num; active: boolean };
+export type ModifierOption = { id: string; groupId: string; name: string; priceDelta: Num; active: boolean; materialId?: string | null; materialQty?: Num | null; unitId?: string | null };
 export type ModifierGroup = { id: string; name: string; minSelect: number; maxSelect: number; active: boolean; options: ModifierOption[]; itemCount?: number };
-export type Variant = { id: string; menuItemId: string; name: string; priceDelta: Num; active: boolean };
+export type Variant = { id: string; menuItemId: string; name: string; priceDelta: Num; active: boolean; consumptionFactor?: Num };
 export type MenuItem = {
   id: string; name: string; description: string | null; categoryId: string | null; category: { id: string; name: string } | null;
   price: Num; taxPct: Num; station: string; posCode: string | null; isVeg: boolean; active: boolean; soldOut: boolean;
@@ -190,12 +191,14 @@ function OverridePriceDialog({ item, outletId, outletName, onClose, onDone }: { 
 function VariantDialog({ item, variant, onClose, onDone }: { item: MenuItem; variant?: Variant; onClose: () => void; onDone: () => void }) {
   const [name, setName] = useState(variant?.name ?? "");
   const [delta, setDelta] = useState(variant ? String(toNumber(variant.priceDelta)) : "0");
+  const [factor, setFactor] = useState(variant?.consumptionFactor !== undefined ? String(toNumber(variant.consumptionFactor)) : "1");
   return (
     <FormDialog open onClose={onClose} title={variant ? `Variant: ${variant.name}` : "Add variant"} submitLabel={variant ? "Save" : "Add variant"}
       description={`Price change relative to the item price (${formatMoney(item.price)}); may be negative.`}
-      onSubmit={() => (variant ? api(`/api/menu/variants/${variant.id}`, { method: "PATCH", body: { priceDelta: Number(delta) } }) : api(`/api/menu/items/${item.id}/variants`, { method: "POST", body: { name: name.trim(), priceDelta: Number(delta) } }))} onDone={onDone}>
+      onSubmit={() => (variant ? api(`/api/menu/variants/${variant.id}`, { method: "PATCH", body: { priceDelta: Number(delta), consumptionFactor: Number(factor) } }) : api(`/api/menu/items/${item.id}/variants`, { method: "POST", body: { name: name.trim(), priceDelta: Number(delta), consumptionFactor: Number(factor) } }))} onDone={onDone}>
       <Field label="Name" name="name" required hint={variant ? "Variant names cannot be changed" : "e.g. Half, Full, Large"}><Input value={name} onChange={(e) => setName(e.target.value)} required maxLength={60} disabled={Boolean(variant)} /></Field>
       <Field label="Price change (₹)" name="priceDelta" required><Input type="number" inputMode="decimal" step="0.01" required value={delta} onChange={(e) => setDelta(e.target.value)} /></Field>
+      <Field label="Recipe multiplier" name="consumptionFactor" required hint="Stock used vs the item's recipe: Half = 0.5, Large = 1.5"><Input type="number" inputMode="decimal" step="0.01" min="0.01" required value={factor} onChange={(e) => setFactor(e.target.value)} /></Field>
     </FormDialog>
   );
 }
@@ -417,11 +420,32 @@ function GroupDialog({ group, onClose, onDone }: { group?: ModifierGroup; onClos
 function OptionDialog({ group, option, onClose, onDone }: { group: ModifierGroup; option?: ModifierOption; onClose: () => void; onDone: () => void }) {
   const [name, setName] = useState(option?.name ?? "");
   const [delta, setDelta] = useState(option ? String(toNumber(option.priceDelta)) : "0");
+  const materials = useMaterials();
+  const units = useUnits();
+  const [materialId, setMaterialId] = useState(option?.materialId ?? "");
+  const [materialQty, setMaterialQty] = useState(option?.materialQty != null ? String(toNumber(option.materialQty)) : "");
+  const [unitId, setUnitId] = useState(option?.unitId ?? "");
+  // Stock link: set all three, or clear it (null) when it existed before.
+  const stock = materialId ? { materialId, materialQty: Number(materialQty), unitId: unitId || null } : option?.materialId ? { materialId: null } : {};
   return (
     <FormDialog open onClose={onClose} title={option ? `Option: ${option.name}` : `Add option to ${group.name}`} submitLabel={option ? "Save" : "Add option"}
-      onSubmit={() => (option ? api(`/api/menu/modifier-options/${option.id}`, { method: "PATCH", body: { priceDelta: Number(delta) } }) : api(`/api/menu/modifier-groups/${group.id}/options`, { method: "POST", body: { name: name.trim(), priceDelta: Number(delta) } }))} onDone={onDone}>
+      onSubmit={() => (option ? api(`/api/menu/modifier-options/${option.id}`, { method: "PATCH", body: { priceDelta: Number(delta), ...stock } }) : api(`/api/menu/modifier-groups/${group.id}/options`, { method: "POST", body: { name: name.trim(), priceDelta: Number(delta), ...stock } }))} onDone={onDone}>
       <Field label="Name" name="name" required hint={option ? "Option names cannot be changed" : undefined}><Input value={name} onChange={(e) => setName(e.target.value)} required maxLength={60} disabled={Boolean(option)} /></Field>
       <Field label="Extra price (₹)" name="priceDelta" required hint="Added to the item price; 0 for free options"><Input type="number" inputMode="decimal" step="0.01" min="0" required value={delta} onChange={(e) => setDelta(e.target.value)} /></Field>
+      <fieldset className="rounded-md border border-ink-200 p-3">
+        <legend className="px-1 text-sm font-medium">Stock used per item (optional)</legend>
+        <p className="mb-2 text-xs text-ink-500">For add-ons that consume stock, e.g. extra cheese: 30 g of Cheese for each item ordered.</p>
+        <div className="grid gap-3 sm:grid-cols-3">
+          <Field label="Material" name="materialId"><MaterialSelect materials={materials.items} value={materialId} onChange={setMaterialId} /></Field>
+          <Field label="Quantity" name="materialQty"><Input type="number" inputMode="decimal" step="any" min="0" value={materialQty} onChange={(e) => setMaterialQty(e.target.value)} required={Boolean(materialId)} disabled={!materialId} /></Field>
+          <Field label="Unit" name="unitId" hint="Blank = the material's base unit">
+            <Select value={unitId} onChange={(e) => setUnitId(e.target.value)} disabled={!materialId}>
+              <option value="">Base unit</option>
+              {(units.data ?? []).filter((u) => u.active).map((u) => <option key={u.id} value={u.id}>{u.code}</option>)}
+            </Select>
+          </Field>
+        </div>
+      </fieldset>
     </FormDialog>
   );
 }

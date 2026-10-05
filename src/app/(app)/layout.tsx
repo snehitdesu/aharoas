@@ -6,6 +6,7 @@ import { unreadCount } from "@/server/services/notifications";
 import { visibleNav } from "@/lib/nav";
 import { AppShell } from "@/components/layout/AppShell";
 import { ToastProvider } from "@/components/ui/Toast";
+import { ReauthProvider } from "@/components/auth/ReauthProvider";
 
 export const dynamic = "force-dynamic";
 
@@ -16,9 +17,11 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const unread = await unreadCount(prisma, ctx).catch(() => null);
   return (
     <ToastProvider>
+      <ReauthProvider>
       <AppShell shell={shell} nav={visibleNav(new Set(shell.permissions))} unread={unread}>
         {children}
       </AppShell>
+      </ReauthProvider>
     </ToastProvider>
   );
 }

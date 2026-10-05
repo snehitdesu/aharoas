@@ -71,7 +71,11 @@ describe("aggregation correctness", () => {
     expect(cats.find((c) => c.category === `Mains ${RUN}`)).toMatchObject({ revenue: 1250 });
     expect(cats.find((c) => c.category === "Unmapped")).toMatchObject({ revenue: 350 });
     const pays = await paymentsByMethod(prisma, mgrA, { outletId: outletA });
-    expect(pays).toEqual([{ method: "UPI", amount: 1100, count: 2 }]); // CASH payment is PARTIAL after refund
+    // A partially refunded payment is still money collected; its refund is netted once.
+    expect(pays).toEqual([
+      { method: "CASH", count: 1, collected: 500, refunded: 100, net: 400, amount: 400 },
+      { method: "UPI", count: 2, collected: 1100, refunded: 0, net: 1100, amount: 1100 },
+    ]);
     expect(await refundsByMethod(prisma, mgrA, { outletId: outletA })).toEqual([{ method: "CASH", amount: 100, count: 1 }]);
   });
 });

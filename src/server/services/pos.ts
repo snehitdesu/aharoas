@@ -2,9 +2,9 @@
  * POS integration service — normalized inbound order pipeline.
  *
  *   receivePOSWebhook
- *     -> verifyWebhook (signature)
+ *     -> authenticateWebhook (tenant binding by provider store id + signature)
  *     -> normalizePOSOrder (provider adapter)
- *     -> checkIdempotency (WebhookEvent unique on provider+eventId)
+ *     -> checkIdempotency (WebhookEvent unique on provider + tenant-namespaced eventId)
  *     -> processPOSOrder (Order unique on outlet+source+externalRef)
  *     -> consumeInventoryForOrder (ledger sourceRef unique)
  *
@@ -18,7 +18,10 @@ import { getPOSProvider, type POSProvider, type NormalizedOrder } from "@/integr
 import { consumeInventoryForOrder } from "@/server/services/orderConsumption";
 import { awardOrderLoyaltyTx } from "@/server/services/loyalty";
 import { calculateOrderTotals } from "@/server/services/orders";
+import { authenticateWebhook, outletMismatch, rejectForTenant, tenantEventId } from "@/server/services/webhookTenant";
 import { D, money } from "@/domain/money";
+import { runInTx } from "@/server/services/_workflow";
+import { raiseAnomaly } from "@/server/services/anomaly";
 
 export type WebhookResult = {
   ok: boolean;
@@ -26,11 +29,11 @@ export type WebhookResult = {
   duplicate: boolean;
   orderId?: string;
   reason?: string;
+  /** Signed, but contradicts its tenant binding (e.g. outlet mismatch): refused, nothing changed. */
+  rejected?: boolean;
+  /** WebhookEvent.eventId (namespaced per tenant account). */
+  eventKey?: string;
 };
-
-export function verifyWebhook(provider: POSProvider, rawBody: string, signature?: string): boolean {
-  return provider.verifyWebhook(rawBody, signature);
-}
 
 export function normalizePOSOrder(provider: POSProvider, payload: unknown): NormalizedOrder {
   return provider.normalizeOrder(payload);
@@ -40,6 +43,12 @@ export function normalizePOSOrder(provider: POSProvider, payload: unknown): Norm
  * Record the webhook event. Returns false if it is a duplicate (already seen),
  * true if newly recorded. The DB unique (provider, eventId) is the guard.
  */
+/** A RECEIVED webhook claim older than this is treated as abandoned (WEBHOOK_CLAIM_STALE_SECONDS, default 300). */
+export function webhookClaimStaleMs(env: NodeJS.ProcessEnv = process.env): number {
+  const n = Number(env.WEBHOOK_CLAIM_STALE_SECONDS);
+  return (Number.isInteger(n) && n >= 30 ? n : 300) * 1000;
+}
+
 export async function checkIdempotency(
   db: PrismaClient,
   provider: string,
@@ -61,7 +70,22 @@ export async function checkIdempotency(
       });
       if (claimed.count === 1) return { isNew: true };
     }
-    // Leave PROCESSED/RECEIVED rows untouched so their true state is preserved.
+    // A RECEIVED claim that never finished (the process crashed / was killed
+    // mid-processing) would otherwise answer every provider retry with
+    // DUPLICATE forever and the event (e.g. a payment capture) would be lost.
+    // Once the claim is older than any processing can take (transactions time
+    // out after 20 s), a signed retry may take it over. The conditional update
+    // (same status + same old timestamp) lets exactly one retry win, and the
+    // order / payment / ledger uniqueness guards make re-processing safe —
+    // exactly as for a FAILED retry above.
+    if (seen.status === "RECEIVED" && meta.signatureValid && seen.receivedAt.getTime() < Date.now() - webhookClaimStaleMs()) {
+      const reclaimed = await db.webhookEvent.updateMany({
+        where: { provider, eventId, status: "RECEIVED", receivedAt: seen.receivedAt },
+        data: { receivedAt: new Date(), signatureValid: true, payload: meta.payload, error: null, organizationId: meta.organizationId, eventType: meta.eventType },
+      });
+      if (reclaimed.count === 1) return { isNew: true };
+    }
+    // Leave PROCESSED and live RECEIVED rows untouched so their true state is preserved.
     return { isNew: false };
   }
   try {
@@ -90,7 +114,12 @@ export async function processPOSOrder(
   normalized: NormalizedOrder,
   db: PrismaClient = prisma
 ): Promise<{ orderId: string; duplicate: boolean }> {
-  return db.$transaction(async (tx) => {
+  // SERIALIZABLE + bounded retry (runInTx), not the provider default: on
+  // PostgreSQL (READ COMMITTED) the read-modify-writes below — the loyalty
+  // balance cache (awardOrderLoyaltyTx) and the unmapped-sale qty counter
+  // (consumeInventoryForOrder) — lose updates under concurrent deliveries.
+  // Safe to retry: nothing here calls out of the database.
+  return runInTx(db, async (tx) => {
     // The provider names the outlet; it must belong to the caller's org/scope.
     const outlet = await tx.outlet.findUnique({ where: { id: normalized.outletId } });
     if (!outlet || outlet.organizationId !== ctx.organizationId) throw new ForbiddenError("Order outlet is outside this organization");
@@ -119,7 +148,8 @@ export async function processPOSOrder(
     const byCode = new Map(menuItems.map((m) => [m.posCode!, m]));
 
     const totals = calculateOrderTotals(
-      normalized.items.map((i) => ({ qty: i.qty, unitPrice: i.unitPrice, taxPct: i.taxPct ?? 0 })),
+      // Add-on deltas are charged per unit, exactly as the POS / captain price a line.
+      normalized.items.map((i) => ({ qty: i.qty, unitPrice: i.unitPrice, taxPct: i.taxPct ?? 0, modifiersPerUnit: (i.modifiers ?? []).reduce((a, m) => a + m.priceDelta, 0) })),
       normalized.discount ?? 0
     );
 
@@ -151,7 +181,7 @@ export async function processPOSOrder(
               qty: D(i.qty),
               unitPrice: money(i.unitPrice),
               taxPct: D(i.taxPct ?? 0),
-              lineTotal: money(i.qty * i.unitPrice),
+              lineTotal: money(D(i.qty).times(D(i.unitPrice).plus((i.modifiers ?? []).reduce((a, m) => a.plus(D(m.priceDelta)), D(0))))),
               station: mi?.station ?? "KITCHEN",
               modifiers: i.modifiers ? { create: i.modifiers.map((m) => ({ name: m.name, priceDelta: money(m.priceDelta) })) } : undefined,
             };
@@ -182,6 +212,21 @@ export async function processPOSOrder(
       }
     }
 
+    // A settled import whose provider-reported payments do not add up to the
+    // order total is still accepted (the money was collected by the provider),
+    // but never silently: the shortfall / excess is raised for the manager.
+    if (normalized.settled && normalized.payments?.length) {
+      const collected = normalized.payments.reduce((a, p) => a.plus(money(p.amount)), D(0));
+      const diff = collected.minus(D(order.total));
+      if (!diff.isZero()) {
+        await raiseAnomaly(tx, ctx, {
+          type: "RECONCILIATION_MISMATCH", severity: diff.abs().gt(100) ? "HIGH" : "MEDIUM", outletId: normalized.outletId,
+          entityType: "Order", entityId: order.id, recurrence: "ONCE",
+          message: `${normalized.source} order ${normalized.externalRef}: provider payments ₹${money(collected).toFixed(2)} vs order total ₹${money(order.total).toFixed(2)} (${diff.gt(0) ? "excess" : "shortfall"} ₹${money(diff.abs()).toFixed(2)})`,
+        });
+      }
+    }
+
     // Consume inventory once (idempotent).
     if (normalized.settled) {
       await consumeInventoryForOrder(tx, ctx, order.id);
@@ -193,8 +238,11 @@ export async function processPOSOrder(
 }
 
 /**
- * Full inbound webhook handler. Verifies signature, enforces idempotency,
- * processes the order and consumes inventory.
+ * Full inbound webhook handler. Binds the delivery to its tenant through the
+ * IntegrationConnection for the provider's store id (signature verified with
+ * that tenant's secret), enforces idempotency per tenant account, processes
+ * the order into the BOUND outlet and consumes inventory. A body outletId is
+ * only a hint that must match the binding.
  */
 export async function receivePOSWebhook(
   args: { providerName?: string; rawBody: string; signature?: string },
@@ -203,55 +251,63 @@ export async function receivePOSWebhook(
   const db = opts.db ?? prisma;
   const provider = opts.provider ?? getPOSProvider(args.providerName);
 
-  const signatureValid = verifyWebhook(provider, args.rawBody, args.signature);
-  if (!signatureValid) {
-    // Record the failed attempt for observability; do not process.
-    let eventId = `invalid_${Date.now()}`;
+  const auth = await authenticateWebhook(db, "POS", provider, args.rawBody, args.signature);
+  if (!auth.ok) {
+    if (auth.reason === "MALFORMED") return { ok: false, signatureValid: true, duplicate: false, reason: "Malformed payload: invalid JSON" };
+    // Record the refused attempt for observability (no tenant); do not process.
+    let eventId = `${auth.reason === "INVALID_SIGNATURE" ? "invalid" : "unbound"}_${Date.now()}`;
     try {
       const parsed = JSON.parse(args.rawBody);
       eventId = String(parsed.eventId ?? parsed.Order?.orderID ?? eventId);
     } catch {
       /* ignore */
     }
+    const error = auth.reason === "INVALID_SIGNATURE" ? "Invalid signature" : "Unknown integration account";
     await db.webhookEvent.create({
-      data: { provider: provider.name, eventId, signatureValid: false, status: "FAILED", payload: args.rawBody, error: "Invalid signature" },
+      data: { provider: provider.name, eventId, signatureValid: auth.signatureValid, status: "FAILED", payload: args.rawBody, error },
     }).catch(() => undefined);
-    return { ok: false, signatureValid: false, duplicate: false, reason: "Invalid signature" };
+    return { ok: false, signatureValid: auth.signatureValid, duplicate: false, reason: error };
   }
 
   let normalized: NormalizedOrder;
   try {
-    normalized = normalizePOSOrder(provider, JSON.parse(args.rawBody));
+    normalized = normalizePOSOrder(provider, auth.payload);
   } catch (e: any) {
     return { ok: false, signatureValid: true, duplicate: false, reason: `Malformed payload: ${e?.message ?? e}` };
   }
 
-  // Resolve org from the outlet.
-  const outlet = await db.outlet.findUnique({ where: { id: normalized.outletId } });
-  if (!outlet) return { ok: false, signatureValid: true, duplicate: false, reason: "Unknown outlet" };
-  const ctx = systemContext(outlet.organizationId, [outlet.id]);
+  const tenant = auth.tenant;
+  if (!tenant.outletId) return { ok: false, signatureValid: true, duplicate: false, reason: "Integration is not bound to an outlet" };
+  const eventKey = tenantEventId(tenant, normalized.eventId);
+  if (outletMismatch(tenant, normalized.outletId)) {
+    const message = "outlet in the payload does not match the integration's bound outlet";
+    await rejectForTenant(db, tenant, { providerKey: provider.name, eventId: eventKey, rawBody: args.rawBody, message });
+    return { ok: false, signatureValid: true, duplicate: false, rejected: true, eventKey, reason: `Rejected: ${message}` };
+  }
+  normalized = { ...normalized, outletId: tenant.outletId };
+  const ctx = systemContext(tenant.organizationId, [tenant.outletId]);
 
-  const idem = await checkIdempotency(db, provider.name, normalized.eventId, {
+  const idem = await checkIdempotency(db, provider.name, eventKey, {
     signatureValid: true,
     payload: args.rawBody,
-    organizationId: outlet.organizationId,
+    organizationId: tenant.organizationId,
   });
   if (!idem.isNew) {
-    return { ok: true, signatureValid: true, duplicate: true, reason: "Duplicate event" };
+    return { ok: true, signatureValid: true, duplicate: true, eventKey, reason: "Duplicate event" };
   }
 
   try {
     const { orderId, duplicate } = await processPOSOrder(ctx, normalized, db);
     await db.webhookEvent.updateMany({
-      where: { provider: provider.name, eventId: normalized.eventId },
+      where: { provider: provider.name, eventId: eventKey },
       data: { status: "PROCESSED", processedAt: new Date() },
     });
-    return { ok: true, signatureValid: true, duplicate, orderId };
+    return { ok: true, signatureValid: true, duplicate, orderId, eventKey };
   } catch (e: any) {
     await db.webhookEvent.updateMany({
-      where: { provider: provider.name, eventId: normalized.eventId },
+      where: { provider: provider.name, eventId: eventKey },
       data: { status: "FAILED", error: String(e?.message ?? e) },
     });
-    return { ok: false, signatureValid: true, duplicate: false, reason: String(e?.message ?? e) };
+    return { ok: false, signatureValid: true, duplicate: false, eventKey, reason: String(e?.message ?? e) };
   }
 }

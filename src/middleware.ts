@@ -8,14 +8,17 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { PATH_HEADER, SESSION_COOKIE } from "@/constants/auth";
 
-// Paths that require a session. Auth + webhook endpoints are intentionally open.
-const OPEN_API_PREFIXES = ["/api/auth", "/api/webhooks", "/api/health"];
+// Paths that require a session. Auth + webhook endpoints are intentionally open;
+// /api/qr is the anonymous guest-ordering API (table token / order key checked by its services).
+const OPEN_API_PREFIXES = ["/api/auth", "/api/webhooks", "/api/health", "/api/qr/"];
 // Operator pages that need a session (the page itself validates it server-side).
 export const PROTECTED_PAGES = [
   "/dashboard", "/pos", "/kitchen",
+  // Phase 6 phone apps
+  "/captain", "/manager",
   // back office
   "/reservations", "/tables", "/menu", "/recipes", "/inventory", "/procurement", "/master", "/customers",
-  "/staff", "/finance", "/reports", "/exports", "/anomalies", "/notifications", "/settings", "/audit",
+  "/staff", "/finance", "/analytics", "/reports", "/exports", "/anomalies", "/notifications", "/settings", "/audit",
   "/account",
 ];
 

@@ -7,12 +7,18 @@ import { assertSameOrigin } from "@/server/api/router";
 import { clientIp, enforceRateLimit, RATE_POLICIES } from "@/server/api/rateLimit";
 import { ValidationError } from "@/server/db/scope";
 import { applyTimingHeaders, logSlowRequest, newRequestId } from "@/server/observability/timing";
+import { log, withRequestContext } from "@/server/observability/log";
+import { recordAuthFailure } from "@/server/observability/alerts";
 
 export const runtime = "nodejs";
 
 export async function POST(req: NextRequest) {
-  const started = performance.now();
   const requestId = newRequestId(req.headers.get("x-request-id"));
+  return withRequestContext({ requestId, method: "POST", path: "/api/auth/login" }, () => login(req, requestId));
+}
+
+async function login(req: NextRequest, requestId: string) {
+  const started = performance.now();
   try {
     assertSameOrigin(req);
     const text = await req.text();
@@ -34,6 +40,11 @@ export async function POST(req: NextRequest) {
     return res;
   } catch (e) {
     const res = fail(e);
+    // Wrong credentials / inactive account / throttled: counted for the brute-force alert (no email or password logged).
+    if (res.status === 401 || res.status === 429) {
+      recordAuthFailure();
+      log.warn("sign-in failed", { event: "auth_failure", status: res.status, ip: clientIp(req) });
+    }
     const durationMs = performance.now() - started;
     applyTimingHeaders(res.headers, requestId, durationMs);
     logSlowRequest({ requestId, method: "POST", path: "/api/auth/login", status: res.status, durationMs });

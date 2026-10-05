@@ -38,6 +38,8 @@ export type OrderDTO = {
   id: string;
   outletId: string;
   channel: string;
+  /** POS | QR | … — QR orders come from guests' table QR codes. */
+  source?: string;
   status: string;
   tableId: string | null;
   customerId: string | null;

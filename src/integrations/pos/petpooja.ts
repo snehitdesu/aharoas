@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { hmacMatches, stringAt } from "@/integrations/hmac";
 import type { NormalizedOrder, POSProvider } from "./types";
 
 /**
@@ -9,15 +9,13 @@ import type { NormalizedOrder, POSProvider } from "./types";
 export class PetpoojaPOSProvider implements POSProvider {
   readonly name = "petpooja";
 
-  verifyWebhook(rawBody: string, signature: string | undefined): boolean {
-    const secret = process.env.PETPOOJA_WEBHOOK_SECRET;
-    if (!secret || !signature) return false;
-    const expected = createHmac("sha256", secret).update(rawBody).digest("hex");
-    try {
-      return timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
-    } catch {
-      return false;
-    }
+  verifyWebhook(rawBody: string, signature: string | undefined, secret?: string): boolean {
+    return hmacMatches(rawBody, signature, secret ?? process.env.PETPOOJA_WEBHOOK_SECRET);
+  }
+
+  /** Petpooja's restaurant id identifies the sending account (mapped to an outlet by IntegrationConnection). */
+  accountRef(payload: unknown): string | undefined {
+    return stringAt(payload, "restID") ?? stringAt(payload, "Order", "restID") ?? stringAt(payload, "order", "restID");
   }
 
   normalizeOrder(payload: unknown): NormalizedOrder {
@@ -30,7 +28,8 @@ export class PetpoojaPOSProvider implements POSProvider {
     return {
       eventId: String(order.orderID ?? order.order_id ?? order.ref_id ?? crypto.randomUUID()),
       externalRef: String(order.orderID ?? order.order_id ?? order.ref_id),
-      outletId: String(p.restID ?? p.outletId ?? order.restID ?? ""),
+      // restID is Petpooja's id, NOT ours: the outlet comes from the tenant binding (accountRef -> IntegrationConnection).
+      outletId: typeof p.outletId === "string" ? p.outletId : "",
       source: "PETPOOJA",
       channel: (order.order_type ?? "AGGREGATOR") as NormalizedOrder["channel"],
       placedAt: order.created_on ? new Date(order.created_on) : new Date(),

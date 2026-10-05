@@ -53,7 +53,9 @@ describe("splitSqlStatements", () => {
   });
 });
 
-describe("applyMigrations", () => {
+// The desktop app is SQLite-only: applyMigrations drives SQLite files through the
+// generated client, which is the PostgreSQL client under `npm run test:pg`.
+describe.skipIf(process.env.TEST_DATABASE_URL?.startsWith("postgres"))("applyMigrations", () => {
   it("builds exactly the schema `prisma migrate deploy` builds, with Prisma-compatible history", async () => {
     const ref = path.join(tmp, "ref.db");
     execFileSync(process.execPath, [prismaCli, "migrate", "deploy"], { env: { ...process.env, DATABASE_URL: sqliteUrl(ref) }, stdio: "pipe" });

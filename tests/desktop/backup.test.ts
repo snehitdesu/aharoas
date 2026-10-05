@@ -17,10 +17,14 @@ const open: ClientFactory = (file) => {
   clients.push(c);
   return c;
 };
+// The desktop app is SQLite-only: these suites drive SQLite files through the
+// generated client, which is the PostgreSQL client under `npm run test:pg`.
+const pg = process.env.TEST_DATABASE_URL?.startsWith("postgres");
 let db: PrismaClient;
 const backupDir = path.join(tmp, "backups");
 
 beforeAll(async () => {
+  if (pg) return;
   db = open(path.join(tmp, "live.db")) as unknown as PrismaClient;
   await db.$queryRawUnsafe("PRAGMA journal_mode = WAL");
   await applyMigrations(db, loadMigrations(path.join(process.cwd(), "prisma", "migrations")));
@@ -31,7 +35,7 @@ afterAll(async () => {
   fs.rmSync(tmp, { recursive: true, force: true });
 });
 
-describe("createVerifiedBackup", () => {
+describe.skipIf(pg)("createVerifiedBackup", () => {
   it("writes a consistent, verified snapshot (including WAL content) with a manifest", async () => {
     const m = await createVerifiedBackup({ db, open, backupDir, reason: "manual", appVersion: "9.9.9", now: new Date(2026, 9, 3, 12, 0, 0) });
     expect(m.file).toBe("aharos-20261003-120000-manual.db");
@@ -66,7 +70,7 @@ describe("createVerifiedBackup", () => {
   });
 });
 
-describe("rotateAutoBackups", () => {
+describe.skipIf(pg)("rotateAutoBackups", () => {
   it("keeps the newest N automatic backups and never removes other kinds", async () => {
     for (let i = 0; i < 5; i++) await createVerifiedBackup({ db, open, backupDir, reason: "auto", appVersion: "9.9.9", now: new Date(2026, 9, 4, 10, i, 0) });
     const nonAuto = listBackups(backupDir).filter((m) => m.reason !== "auto").length;

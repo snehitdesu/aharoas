@@ -6,6 +6,7 @@
  * request bodies.
  */
 import { randomUUID } from "node:crypto";
+import { log } from "@/server/observability/log";
 
 export const SLOW_REQUEST_MS = (() => {
   const n = Number(process.env.SLOW_REQUEST_MS ?? 500);
@@ -35,10 +36,10 @@ type SlowInfo = {
 /** Structured slow-request line. Path only — no query string (may contain emails). */
 export function logSlowRequest(info: SlowInfo) {
   if (info.durationMs < SLOW_REQUEST_MS) return;
-  console.warn(JSON.stringify({ level: "warn", msg: "slow_request", ...info, durationMs: Math.round(info.durationMs) }));
+  log.warn("slow_request", { event: "slow_request", ...info, durationMs: Math.round(info.durationMs) });
 }
 
 export function logSlowQuery(info: { durationMs: number; target?: string }) {
   if (info.durationMs < SLOW_REQUEST_MS) return;
-  console.warn(JSON.stringify({ level: "warn", msg: "slow_query", durationMs: Math.round(info.durationMs), target: info.target }));
+  log.warn("slow_query", { event: "slow_query", durationMs: Math.round(info.durationMs), target: info.target });
 }

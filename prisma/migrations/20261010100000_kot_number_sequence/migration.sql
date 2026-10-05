@@ -1,0 +1,4 @@
+-- Phase 9: PostgreSQL-only change (kot_number_seq, see prisma/postgres/migrations).
+-- SQLite serializes writers, so KOT numbers keep using max(number) + 1 here.
+-- Intentionally contains no statement: kept so both migration histories end at
+-- the same name (readiness check), and the desktop migrator records it as applied.

@@ -103,6 +103,10 @@ function QrDialog({ table, onClose, onDone }: { table: TableRow; onClose: () => 
         <>
           <p className="text-sm text-ink-700">Current QR token (encode it in the printed table QR):</p>
           <code className="mt-2 block break-all rounded-md border border-ink-300 bg-ink-100/60 p-2 text-sm" aria-label="QR token">{table.qrToken}</code>
+          <p className="mt-3 text-sm text-ink-700">Guest ordering link (the address the printed QR should open):</p>
+          <a href={`/t/${encodeURIComponent(table.qrToken)}`} target="_blank" rel="noopener" className="mt-1 block break-all text-sm font-medium text-brand-700 hover:underline" aria-label="Guest ordering link">
+            {`${typeof window === "undefined" ? "" : window.location.origin}/t/${encodeURIComponent(table.qrToken)}`}
+          </a>
         </>
       ) : <p className="text-sm text-ink-700">No QR token has been issued for this table.</p>}
       <div className="mt-4">
@@ -191,7 +195,7 @@ export function TablesScreen() {
             if (!tiles.length && floorFilter !== "none") return null;
             if (!tiles.length) return null;
             return (
-              <div key={floor.id || "none"} className="rounded-xl border border-ink-200 bg-white p-4 shadow-card">
+              <div key={floor.id || "none"} className="rounded-xl border border-ink-200 bg-paper p-4 shadow-card">
                 <h2 className="mb-3 text-sm font-semibold text-ink-900">{floor.name}</h2>
                 <ul className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-6">
                   {tiles.map((t) => {
@@ -201,7 +205,7 @@ export function TablesScreen() {
                         <button
                           type="button"
                           onClick={() => canStatus && setDialog({ kind: "status", table: t })}
-                          className={`flex min-h-[4.5rem] w-full flex-col items-start justify-between rounded-lg border px-2.5 py-2 text-left ${FLOOR_TILE[t.status] ?? "border-ink-200 bg-white"}`}
+                          className={`flex min-h-[4.5rem] w-full flex-col items-start justify-between rounded-lg border px-2.5 py-2 text-left ${FLOOR_TILE[t.status] ?? "border-ink-200 bg-paper"}`}
                         >
                           <span className="text-sm font-semibold">{t.code}</span>
                           <span className="text-[11px] font-medium uppercase tracking-wide">{humanize(t.status)}</span>

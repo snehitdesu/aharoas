@@ -12,6 +12,9 @@ import {
 
 export const runtime = "nodejs";
 
+/** Idempotency-Key header: a retried create returns the original document. */
+const idemKey = (req: { headers: Headers }) => req.headers.get("idempotency-key") ?? undefined;
+
 export const { GET, POST } = createRouter([
   // reads (paginated, outlet-scoped)
   { method: "GET", path: "indents", handler: ({ ctx, query }) => listIndents(prisma, ctx, query) },
@@ -26,13 +29,13 @@ export const { GET, POST } = createRouter([
   // commands
   { method: "POST", path: "indents", handler: ({ ctx, body }) => createIndent(ctx, body as never) },
   { method: "POST", path: "indents/:id/transition", handler: ({ ctx, params, body }) => transitionIndent(ctx, params.id, z.object({ to: IndentStatus.zod }).parse(body).to) },
-  { method: "POST", path: "purchase-orders", handler: ({ ctx, body }) => createPurchaseOrder(ctx, body as never) },
+  { method: "POST", path: "purchase-orders", handler: ({ ctx, body, req }) => createPurchaseOrder(ctx, body as never, undefined, idemKey(req)) },
   { method: "POST", path: "purchase-orders/:id/transition", handler: ({ ctx, params, body }) => transitionPurchaseOrder(ctx, params.id, z.object({ to: PurchaseOrderStatus.zod }).parse(body).to) },
-  { method: "POST", path: "grns", handler: ({ ctx, body }) => createGRN(ctx, body as never) },
+  { method: "POST", path: "grns", handler: ({ ctx, body, req }) => createGRN(ctx, body as never, undefined, idemKey(req)) },
   { method: "POST", path: "grns/:id/post", handler: ({ ctx, params }) => postGRN(ctx, params.id) },
-  { method: "POST", path: "bills", handler: ({ ctx, body }) => createPurchaseBill(ctx, body as never) },
-  { method: "POST", path: "bills/:id/cancel", handler: ({ ctx, params }) => cancelPurchaseBill(ctx, params.id) },
-  { method: "POST", path: "vendor-payments", handler: ({ ctx, body }) => payVendor(ctx, body as never) },
+  { method: "POST", path: "bills", handler: ({ ctx, body, req }) => createPurchaseBill(ctx, body as never, undefined, idemKey(req)) },
+  { method: "POST", path: "bills/:id/cancel", reauth: "finance.void", handler: ({ ctx, params }) => cancelPurchaseBill(ctx, params.id) },
+  { method: "POST", path: "vendor-payments", handler: ({ ctx, body, req }) => payVendor(ctx, { ...(body as object), ...(idemKey(req) ? { idempotencyKey: idemKey(req) } : {}) } as never) },
   {
     method: "GET", path: "vendor-dues",
     handler: ({ ctx, query }) => vendorDues(prisma, ctx, z.object({ outletId: z.string().optional(), vendorId: z.string().optional(), asOf: z.coerce.date().optional() }).parse(query)),

@@ -45,6 +45,8 @@ export type RequestOptions = {
   signal?: AbortSignal;
   /** Client-side deadline; a hung request surfaces as a retryable network error. */
   timeoutMs?: number;
+  /** Extra request headers (e.g. the guest order access key). */
+  headers?: Record<string, string>;
 };
 
 export const DEFAULT_TIMEOUT_MS = 20_000;
@@ -56,8 +58,92 @@ export function buildUrl(path: string, query?: RequestOptions["query"]): string 
   return s ? `${path}?${s}` : path;
 }
 
+// ---------------- step-up re-authentication ----------------
+
+/** Outcome of asking the operator to confirm their password for one scope. */
+export type ReauthOutcome = "granted" | "cancelled" | "session_ended";
+export type ReauthPrompt = (request: { scope: string; message: string }) => Promise<ReauthOutcome>;
+
+let reauthPrompt: ReauthPrompt | null = null;
+const pendingPrompts = new Map<string, Promise<ReauthOutcome>>();
+
+/**
+ * Install the UI that asks for the password (ReauthProvider). Returns an
+ * uninstaller. Without a prompt, a ReauthRequiredError simply propagates.
+ */
+export function setReauthPrompt(prompt: ReauthPrompt | null): () => void {
+  reauthPrompt = prompt;
+  return () => {
+    if (reauthPrompt === prompt) reauthPrompt = null;
+  };
+}
+
+export function reauthScopeOf(e: unknown): string | null {
+  if (!(e instanceof ApiError) || e.status !== 403 || e.code !== "ReauthRequiredError") return null;
+  const scope = (e.details as { scope?: unknown } | undefined)?.scope;
+  return typeof scope === "string" ? scope : null;
+}
+
+/** Concurrent requests needing the same scope share ONE dialog. */
+function promptFor(scope: string, message: string): Promise<ReauthOutcome> {
+  const prompt = reauthPrompt;
+  if (!prompt) return Promise.resolve("cancelled");
+  let p = pendingPrompts.get(scope);
+  if (!p) {
+    p = prompt({ scope, message }).finally(() => pendingPrompts.delete(scope));
+    pendingPrompts.set(scope, p);
+  }
+  return p;
+}
+
+export const REAUTH_CANCELLED_MESSAGE = "Password confirmation was cancelled — nothing was changed.";
+
+/**
+ * JSON request to an /api/* route. If the server answers ReauthRequiredError
+ * (the step-up gate runs BEFORE the action, so nothing happened), the operator
+ * is asked for their password; on a server-issued grant the SAME request
+ * (same body, same Idempotency-Key) is retried exactly once. The client never
+ * claims re-authentication itself — the retry only succeeds if the server now
+ * holds a fresh grant on this session. A second failure is returned as-is.
+ */
 export async function api<T>(path: string, opts: RequestOptions = {}): Promise<T> {
-  const headers: Record<string, string> = { Accept: "application/json" };
+  try {
+    return await request<T>(path, opts);
+  } catch (e) {
+    const scope = reauthScopeOf(e);
+    if (!scope || !reauthPrompt) throw e;
+    const outcome = await promptFor(scope, (e as ApiError).message);
+    if (outcome === "session_ended") throw new ApiError(401, "UnauthorizedError", "Your session has ended. Please sign in again.");
+    if (outcome !== "granted") throw new ApiError(403, "ReauthCancelled", REAUTH_CANCELLED_MESSAGE, { scope });
+    return request<T>(path, opts);
+  }
+}
+
+/**
+ * Automatic retries of HTTP 503 (a transaction conflict that outlived the
+ * server's own retries, or an instance draining for a restart). Only for
+ * requests that are safe to repeat: reads, and writes carrying an
+ * Idempotency-Key (the server returns the original result instead of acting
+ * twice). Bounded, honouring Retry-After (capped at 3 s), with jitter.
+ */
+const MAX_BUSY_RETRIES = 2;
+
+/** One HTTP request (plus bounded busy retries), no re-auth handling (also used by the re-auth dialog itself). */
+export async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
+  const repeatable = (opts.method ?? "GET") === "GET" || Boolean(opts.idempotencyKey);
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await requestOnce<T>(path, opts);
+    } catch (e) {
+      if (!(e instanceof ApiError) || e.status !== 503 || !repeatable || attempt >= MAX_BUSY_RETRIES || opts.signal?.aborted) throw e;
+      const waitMs = Math.min(3, e.retryAfterSeconds ?? 1) * 1000 * (0.5 + Math.random() / 2);
+      await new Promise((r) => setTimeout(r, waitMs));
+    }
+  }
+}
+
+async function requestOnce<T>(path: string, opts: RequestOptions): Promise<T> {
+  const headers: Record<string, string> = { ...(opts.headers ?? {}), Accept: "application/json" };
   if (opts.body !== undefined) headers["Content-Type"] = "application/json";
   if (opts.idempotencyKey) headers["Idempotency-Key"] = opts.idempotencyKey;
   // Caller aborts propagate as AbortError; our own deadline becomes a Timeout ApiError.

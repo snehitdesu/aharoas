@@ -12,7 +12,7 @@ const COMMON = new Set([
   "password", "password1", "password12", "password123", "password1234", "passw0rd", "p@ssw0rd", "p@ssword",
   "1234567890", "12345678910", "0123456789", "9876543210", "1111111111", "0000000000",
   "qwertyuiop", "qwerty1234", "qwerty12345", "asdfghjkl", "letmein123", "welcome123", "admin12345", "iloveyou12",
-  "changeme123", "aharos1234", "aharos12345", "restaurant",
+  "changeme123", "aharos1234", "aharos12345", "restora123", "restora1234", "restora12345", "restaurant",
 ]);
 
 /** Every policy violation for `password` (empty = acceptable). */

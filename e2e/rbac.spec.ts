@@ -5,7 +5,7 @@
  * deactivation (sessions revoked, sign-in refused, audited).
  */
 import { test, expect, type APIRequestContext } from "@playwright/test";
-import { statePath, outletByCode, apiCall, apiAs, sessionFor, signIn, CENTRAL } from "./helpers";
+import { statePath, outletByCode, apiCall, apiAs, sessionFor, signIn, CENTRAL, confirmPasswordIfPrompted } from "./helpers";
 
 test.describe.configure({ mode: "serial" });
 
@@ -106,7 +106,7 @@ test.describe("authorization", () => {
     const row = page.getByRole("table", { name: "Staff" }).getByRole("row").filter({ hasText: "manager2@demo.local" });
     await row.getByRole("button", { name: "Deactivate", exact: true }).click();
     await page.getByRole("dialog", { name: "Deactivate Meera Manager?" }).getByRole("button", { name: "Deactivate" }).click();
-    await expect(row.getByRole("button", { name: "Activate", exact: true })).toBeVisible();
+    await confirmPasswordIfPrompted(page, row.getByRole("button", { name: "Activate", exact: true }));
 
     // Their existing session is dead and they cannot sign back in.
     expect((await vp.request.get("/api/auth/me")).status()).toBe(401);

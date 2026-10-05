@@ -101,13 +101,13 @@ test("first run: setup wizard initializes the local database and owner", async (
     await setup.getByLabel("Password", { exact: true }).fill(OWNER.password);
     await setup.getByLabel("Repeat password").fill(OWNER.password);
     await setup.getByRole("button", { name: "Create restaurant" }).click();
-    await expect(setup.getByRole("heading", { name: "Aharos is ready" })).toBeVisible();
+    await expect(setup.getByRole("heading", { name: "RESTORA is ready" })).toBeVisible();
     await expect(setup.getByText(OWNER.email)).toBeVisible();
-    await setup.getByRole("button", { name: "Open Aharos" }).click();
+    await setup.getByRole("button", { name: "Open RESTORA" }).click();
 
     const page = await windowWhere(app, isApp);
     await expect(page).toHaveURL(/\/login/);
-    await expect(page).toHaveTitle(/Aharos/);
+    await expect(page).toHaveTitle(/RESTORA/);
     test.info().annotations.push({ type: "timing", description: `login page after setup at ${Date.now() - t0} ms` });
 
     // Data directory layout + the per-install secret is not stored in clear text.
@@ -213,7 +213,7 @@ test("renderer isolation: no Node, no external network, navigation locked, valid
     const resolved = await app.evaluate(async ({ session }) => (await session.defaultSession.resolveHost("localhost")).endpoints.map((e) => e.address));
     expect(resolved).toEqual(["127.0.0.1"]);
     expect(await page.evaluate(() => [typeof (globalThis as { require?: unknown }).require, typeof (globalThis as { process?: unknown }).process, typeof (globalThis as { module?: unknown }).module])).toEqual(["undefined", "undefined", "undefined"]);
-    expect(await page.evaluate(() => Object.keys((window as unknown as { aharosDesktop: object }).aharosDesktop).sort())).toEqual(["info", "printers", "testPrint"]);
+    expect(await page.evaluate(() => Object.keys((window as unknown as { aharosDesktop: object }).aharosDesktop).sort())).toEqual(["info", "onReauthRequest", "printers", "testPrint"]);
 
     // External requests are blocked by the shell.
     const external = await page.evaluate(() => fetch("https://example.com/").then(() => "loaded", (e) => `blocked: ${(e as Error).name}`));
@@ -248,6 +248,12 @@ test("RBAC is enforced through the desktop shell; logout ends the session", asyn
     if (/\/login/.test(page.url())) await login(page, OWNER.email, OWNER.password);
 
     // Owner creates a cashier; the cashier sets a password with the one-time link.
+    // Creating staff is a sensitive action (H3): refused until the owner re-enters their password.
+    const body = { name: CASHIER.name, email: CASHIER.email, role: "CASHIER", outletId };
+    const unconfirmed = await api<unknown>(page, "POST", "/api/staff", body);
+    expect(unconfirmed.status).toBe(403);
+    expect((unconfirmed.body as unknown as { error: { code: string } }).error.code).toBe("ReauthRequiredError");
+    expect((await api(page, "POST", "/api/auth/reauth", { password: OWNER.password, scope: "staff.manage" })).status).toBe(200);
     const staff = await api<{ setup: { token: string } }>(page, "POST", "/api/staff", { name: CASHIER.name, email: CASHIER.email, role: "CASHIER", outletId });
     expect(staff.status, JSON.stringify(staff.body)).toBe(200);
     const done = await api(page, "POST", "/api/auth/password/complete", { token: staff.body!.data.setup.token, password: CASHIER.password });
@@ -340,12 +346,30 @@ test("restore from backup: owner only, verified, reversible through the pre-rest
     await expect.poll(dialogs).toEqual(["Only the restaurant Owner can restore a backup."]);
     expect((await api(page, "GET", `/api/orders/${orderId}`)).status).toBe(200);
 
-    // 2. The owner restores the automatic backup taken before the POS order existed.
+    // 2. The owner must re-enter their password (H3): cancelling the dialog restores nothing.
     await goto(page, "/dashboard");
     await page.getByRole("button", { name: "Sign out" }).click();
     await login(page, OWNER.email, OWNER.password);
     await stubDialogs(auto);
     await clickRestore();
+    const reauth = page.getByRole("dialog", { name: "Confirm your password" });
+    await expect(reauth).toContainText("Confirm your password to restore a backup.");
+    await reauth.getByRole("button", { name: "Cancel" }).click();
+    await expect(reauth).toBeHidden();
+    await expect.poll(() => mainLog().includes("Restore not authorized: cancelled")).toBe(true);
+    expect(restoredCount()).toBe(0);
+    expect(await dialogs()).toEqual([]); // no file picker, no confirm: nothing happened
+    expect((await api(page, "GET", `/api/orders/${orderId}`)).status).toBe(200);
+
+    // A wrong password is refused in the dialog; the right one authorizes the restore.
+    await clickRestore();
+    await reauth.getByLabel("Current password").fill("Wrong#Password1");
+    await reauth.getByRole("button", { name: "Confirm" }).click();
+    await expect(reauth.getByRole("alert")).toContainText("That password is incorrect");
+    expect(restoredCount()).toBe(0);
+    await reauth.getByLabel("Current password").fill(OWNER.password);
+    await reauth.getByRole("button", { name: "Confirm" }).click();
+    // The owner restores the automatic backup taken before the POS order existed.
     await expect.poll(restoredCount, { timeout: 60_000 }).toBe(1);
     expect((await dialogs()).filter((d) => d.startsWith("ERROR"))).toEqual([]);
     const pre = fs.readdirSync(backups).find((f) => /-pre-restore\.db$/.test(f));
@@ -355,9 +379,11 @@ test("restore from backup: owner only, verified, reversible through the pre-rest
     await login(page, OWNER.email, OWNER.password);
     expect((await api(page, "GET", `/api/orders/${orderId}`)).status).toBe(404);
 
-    // 3. Undo: restore the pre-restore backup → the order is back.
+    // 3. Undo: restore the pre-restore backup → the order is back (a new session confirms again).
     await stubDialogs(path.join(backups, pre!));
     await clickRestore();
+    await reauth.getByLabel("Current password").fill(OWNER.password);
+    await reauth.getByRole("button", { name: "Confirm" }).click();
     await expect.poll(restoredCount, { timeout: 60_000 }).toBe(2);
     await expect(page).toHaveURL(/\/login|\/dashboard/);
     if (/\/login/.test(page.url())) await login(page, OWNER.email, OWNER.password);

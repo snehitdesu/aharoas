@@ -27,6 +27,8 @@ export type NavItem = {
 export const NAV_ITEMS: NavItem[] = [
   { href: "/dashboard", label: "Dashboard", icon: "home", section: "Operations", description: "Today at this outlet" },
   { href: "/pos", label: "POS", icon: "pos", permission: "order.create", section: "Operations", description: "Take orders and payments" },
+  { href: "/captain", label: "Captain (mobile)", icon: "table", permission: "order.create", section: "Operations", description: "Tables, orders and kitchen status on a phone" },
+  { href: "/manager", label: "Manager (mobile)", icon: "chart", anyOf: ["reports.view", "finance.view"], section: "Operations", description: "Today, live operations, alerts and staff on a phone" },
   { href: "/kitchen", label: "Kitchen", icon: "kitchen", permission: "kot.view", section: "Operations", description: "Kitchen display (KDS)" },
   { href: "/reservations", label: "Reservations", icon: "calendar", permission: "reservation.manage", section: "Operations", description: "Bookings and waitlist" },
   { href: "/tables", label: "Floors & tables", icon: "table", anyOf: ["outlet.manage", "order.view", "reservation.manage"], section: "Operations", description: "Floor plan, table status, QR" },
@@ -70,6 +72,7 @@ export const NAV_ITEMS: NavItem[] = [
   { href: "/finance/drawer", label: "Cash drawer", icon: "cash", permission: "finance.view", section: "Finance", description: "Drawer sessions" },
   { href: "/finance/reconciliation", label: "Reconciliation", icon: "scale", permission: "finance.view", section: "Finance", description: "Daily and provider reconciliation" },
 
+  { href: "/analytics", label: "Analytics", icon: "chart", anyOf: ["reports.view", "finance.view", "inventory.view", "purchase.view"], section: "Insights", description: "Sales, menu, stock and finance analytics with rule-based insights" },
   { href: "/reports", label: "Reports", icon: "chart", anyOf: ["reports.view", "inventory.view", "purchase.view", "finance.view", "customer.view"], section: "Insights", description: "Report center" },
   { href: "/exports", label: "Exports", icon: "download", permission: "export.run", section: "Insights", description: "Background CSV exports" },
   { href: "/anomalies", label: "Anomalies", icon: "alert", permission: "anomaly.view", section: "Insights", description: "Detected operational anomalies" },
@@ -77,6 +80,8 @@ export const NAV_ITEMS: NavItem[] = [
 
   { href: "/settings/organization", label: "Organization", icon: "building", anyOf: ["org.manage", "outlet.manage"], section: "Admin", description: "Organization profile" },
   { href: "/settings/outlets", label: "Outlets", icon: "store", anyOf: ["org.manage", "outlet.manage"], section: "Admin", description: "Outlets" },
+  { href: "/settings/integrations", label: "Integrations", icon: "swap", permission: "integration.manage", section: "Admin", description: "Payment gateway, ordering platforms, messaging, accounting export" },
+  { href: "/settings/printers", label: "Printers & drawer", icon: "receipt", anyOf: ["outlet.manage", "payment.take"], section: "Admin", description: "Receipt / kitchen printers and the cash drawer" },
   { href: "/settings/departments", label: "Departments", icon: "grid", permission: "master.view", section: "Admin", description: "Outlet departments" },
   { href: "/audit", label: "Audit log", icon: "shield", permission: "audit.view", section: "Admin", description: "Who changed what" },
 ];

@@ -21,6 +21,7 @@ import { type AccessContext, ForbiddenError, NotFoundError, ValidationError, ass
 import { assertCan } from "@/server/auth/rbac";
 import { writeAudit } from "@/server/audit/log";
 import { type Client, type Tx, runInTx } from "@/server/services/_workflow";
+import { resolveUnit } from "@/server/services/inventory";
 import { D, money, num } from "@/domain/money";
 
 const price = z.number().nonnegative().max(1_000_000);
@@ -146,27 +147,30 @@ export async function setMenuItemAvailability(ctx: AccessContext, menuItemId: st
 
 // ---------------- Variants ----------------
 
-export async function addVariant(ctx: AccessContext, input: { menuItemId: string; name: string; priceDelta: number }, db: Client = prisma) {
-  const data = z.object({ menuItemId: z.string(), name: z.string().trim().min(1).max(60), priceDelta: delta }).parse(input);
+/** Recipe multiplier for a variant (Half = 0.5, Large = 1.5). */
+const consumptionFactor = z.number().positive().max(100);
+
+export async function addVariant(ctx: AccessContext, input: { menuItemId: string; name: string; priceDelta: number; consumptionFactor?: number }, db: Client = prisma) {
+  const data = z.object({ menuItemId: z.string(), name: z.string().trim().min(1).max(60), priceDelta: delta, consumptionFactor: consumptionFactor.default(1) }).parse(input);
   assertMenuManager(ctx);
   return runInTx(db, async (tx) => {
     const item = await loadItem(tx, ctx, data.menuItemId);
     if (D(item.price).plus(data.priceDelta).lt(0)) throw new ValidationError("Variant price would be negative");
-    const v = await unique(() => tx.menuItemVariant.create({ data: { organizationId: ctx.organizationId, menuItemId: data.menuItemId, name: data.name, priceDelta: money(data.priceDelta) } }), "Variant already exists on this item");
+    const v = await unique(() => tx.menuItemVariant.create({ data: { organizationId: ctx.organizationId, menuItemId: data.menuItemId, name: data.name, priceDelta: money(data.priceDelta), consumptionFactor: D(data.consumptionFactor) } }), "Variant already exists on this item");
     await writeAudit(tx, ctx, { action: "CREATE", entityType: "MenuItemVariant", entityId: v.id, after: data });
     return v;
   });
 }
 
-export async function updateVariant(ctx: AccessContext, variantId: string, patch: { priceDelta?: number; active?: boolean }, db: Client = prisma) {
-  const data = z.object({ priceDelta: delta.optional(), active: z.boolean().optional() }).parse(patch);
+export async function updateVariant(ctx: AccessContext, variantId: string, patch: { priceDelta?: number; active?: boolean; consumptionFactor?: number }, db: Client = prisma) {
+  const data = z.object({ priceDelta: delta.optional(), active: z.boolean().optional(), consumptionFactor: consumptionFactor.optional() }).parse(patch);
   assertMenuManager(ctx);
   return runInTx(db, async (tx) => {
     const v = await tx.menuItemVariant.findUnique({ where: { id: variantId }, include: { menuItem: true } });
     if (!v || v.organizationId !== ctx.organizationId) throw new NotFoundError("Variant not found");
     if (data.priceDelta !== undefined && D(v.menuItem.price).plus(data.priceDelta).lt(0)) throw new ValidationError("Variant price would be negative");
-    const updated = await tx.menuItemVariant.update({ where: { id: variantId }, data: { ...data, ...(data.priceDelta !== undefined ? { priceDelta: money(data.priceDelta) } : {}) } });
-    await writeAudit(tx, ctx, { action: data.priceDelta !== undefined ? "PRICE_CHANGE" : "UPDATE", entityType: "MenuItemVariant", entityId: variantId, before: { priceDelta: num(v.priceDelta), active: v.active }, after: data });
+    const updated = await tx.menuItemVariant.update({ where: { id: variantId }, data: { ...data, ...(data.priceDelta !== undefined ? { priceDelta: money(data.priceDelta) } : {}), ...(data.consumptionFactor !== undefined ? { consumptionFactor: D(data.consumptionFactor) } : {}) } });
+    await writeAudit(tx, ctx, { action: data.priceDelta !== undefined ? "PRICE_CHANGE" : "UPDATE", entityType: "MenuItemVariant", entityId: variantId, before: { priceDelta: num(v.priceDelta), active: v.active, consumptionFactor: num(v.consumptionFactor) }, after: data });
     return updated;
   });
 }
@@ -202,25 +206,48 @@ export async function updateModifierGroup(ctx: AccessContext, groupId: string, p
   });
 }
 
-export async function addModifierOption(ctx: AccessContext, input: { groupId: string; name: string; priceDelta?: number }, db: Client = prisma) {
-  const data = z.object({ groupId: z.string(), name: z.string().trim().min(1).max(60), priceDelta: z.number().min(0).max(1_000_000).default(0) }).parse(input);
+/**
+ * Stock an option consumes per unit of the item ordered (e.g. extra cheese:
+ * 30 g of Cheese). All three together, or `materialId: null` to clear.
+ */
+const stockLink = {
+  materialId: z.string().min(1).nullable().optional(),
+  materialQty: z.number().positive().max(1_000_000).optional(),
+  unitId: z.string().min(1).nullable().optional(),
+};
+
+async function stockLinkData(tx: Tx, ctx: AccessContext, l: { materialId?: string | null; materialQty?: number; unitId?: string | null }) {
+  if (l.materialId === undefined) {
+    if (l.materialQty !== undefined || l.unitId !== undefined) throw new ValidationError("A stock quantity needs a material");
+    return {};
+  }
+  if (l.materialId === null) return { materialId: null, materialQty: null, unitId: null };
+  if (l.materialQty === undefined) throw new ValidationError("Set the quantity of the material this option uses");
+  await resolveUnit(tx, ctx, l.materialId, l.unitId); // material in this org + unit convertible to its base unit
+  return { materialId: l.materialId, materialQty: D(l.materialQty), unitId: l.unitId ?? null };
+}
+
+export async function addModifierOption(ctx: AccessContext, input: { groupId: string; name: string; priceDelta?: number; materialId?: string | null; materialQty?: number; unitId?: string | null }, db: Client = prisma) {
+  const data = z.object({ groupId: z.string(), name: z.string().trim().min(1).max(60), priceDelta: z.number().min(0).max(1_000_000).default(0), ...stockLink }).parse(input);
   assertMenuManager(ctx);
   return runInTx(db, async (tx) => {
     await loadGroup(tx, ctx, data.groupId);
-    const o = await unique(() => tx.modifierOption.create({ data: { organizationId: ctx.organizationId, groupId: data.groupId, name: data.name, priceDelta: money(data.priceDelta) } }), "Option already exists in this group");
+    const link = await stockLinkData(tx, ctx, data);
+    const o = await unique(() => tx.modifierOption.create({ data: { organizationId: ctx.organizationId, groupId: data.groupId, name: data.name, priceDelta: money(data.priceDelta), ...link } }), "Option already exists in this group");
     await writeAudit(tx, ctx, { action: "CREATE", entityType: "ModifierOption", entityId: o.id, after: data });
     return o;
   });
 }
 
-export async function updateModifierOption(ctx: AccessContext, optionId: string, patch: { priceDelta?: number; active?: boolean }, db: Client = prisma) {
-  const data = z.object({ priceDelta: z.number().min(0).max(1_000_000).optional(), active: z.boolean().optional() }).parse(patch);
+export async function updateModifierOption(ctx: AccessContext, optionId: string, patch: { priceDelta?: number; active?: boolean; materialId?: string | null; materialQty?: number; unitId?: string | null }, db: Client = prisma) {
+  const data = z.object({ priceDelta: z.number().min(0).max(1_000_000).optional(), active: z.boolean().optional(), ...stockLink }).parse(patch);
   assertMenuManager(ctx);
   return runInTx(db, async (tx) => {
     const o = await tx.modifierOption.findUnique({ where: { id: optionId } });
     if (!o || o.organizationId !== ctx.organizationId) throw new NotFoundError("Modifier option not found");
-    const updated = await tx.modifierOption.update({ where: { id: optionId }, data: { ...data, ...(data.priceDelta !== undefined ? { priceDelta: money(data.priceDelta) } : {}) } });
-    await writeAudit(tx, ctx, { action: data.priceDelta !== undefined ? "PRICE_CHANGE" : "UPDATE", entityType: "ModifierOption", entityId: optionId, before: { priceDelta: num(o.priceDelta), active: o.active }, after: data });
+    const link = await stockLinkData(tx, ctx, data);
+    const updated = await tx.modifierOption.update({ where: { id: optionId }, data: { ...(data.priceDelta !== undefined ? { priceDelta: money(data.priceDelta) } : {}), ...(data.active !== undefined ? { active: data.active } : {}), ...link } });
+    await writeAudit(tx, ctx, { action: data.priceDelta !== undefined ? "PRICE_CHANGE" : "UPDATE", entityType: "ModifierOption", entityId: optionId, before: { priceDelta: num(o.priceDelta), active: o.active, materialId: o.materialId, materialQty: o.materialQty === null ? null : num(o.materialQty), unitId: o.unitId }, after: data });
     return updated;
   });
 }
@@ -328,8 +355,10 @@ export type PricedSelection = {
   unitPrice: ReturnType<typeof D>;
   taxPct: ReturnType<typeof D>;
   station: string;
-  /** Per-unit modifier deltas from configured options. */
-  modifiers: Array<{ name: string; priceDelta: ReturnType<typeof D> }>;
+  /** The variant chosen (its recipe consumption factor applies at stock consumption). */
+  variantId?: string;
+  /** Per-unit modifier deltas from configured options (optionId: add-on stock consumption). */
+  modifiers: Array<{ name: string; priceDelta: ReturnType<typeof D>; optionId: string }>;
 };
 
 /**
@@ -367,11 +396,11 @@ export async function priceMenuSelection(tx: Tx, ctx: AccessContext, input: { me
     for (const o of picked) {
       if (!o.active) throw new ValidationError(`${o.name} is not available`);
       chosen.delete(o.id);
-      modifiers.push({ name: `${group.name}: ${o.name}`, priceDelta: D(o.priceDelta) });
+      modifiers.push({ name: `${group.name}: ${o.name}`, priceDelta: D(o.priceDelta), optionId: o.id });
     }
     if (picked.length < group.minSelect) throw new ValidationError(`${group.name}: choose at least ${group.minSelect}`);
     if (picked.length > group.maxSelect) throw new ValidationError(`${group.name}: choose at most ${group.maxSelect}`);
   }
   if (chosen.size) throw new ValidationError("Modifier option is not offered for this item");
-  return { menuItemId: item.id, name, unitPrice: money(unitPrice), taxPct: D(item.taxPct), station: item.station, modifiers };
+  return { menuItemId: item.id, name, unitPrice: money(unitPrice), taxPct: D(item.taxPct), station: item.station, variantId: input.variantId, modifiers };
 }

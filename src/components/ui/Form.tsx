@@ -12,7 +12,7 @@ import { Button } from "@/components/ui/Button";
 import { Dialog } from "@/components/ui/Dialog";
 
 const control =
-  "h-9 w-full rounded-md border border-ink-300 bg-white px-2.5 text-sm text-ink-900 placeholder:text-ink-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-500 disabled:bg-ink-100 disabled:text-ink-500 aria-[invalid=true]:border-bad-500";
+  "h-9 w-full rounded-md border border-ink-300 bg-paper px-2.5 text-sm text-ink-900 placeholder:text-ink-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-500 disabled:bg-ink-100 disabled:text-ink-500 aria-[invalid=true]:border-bad-500";
 
 export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement>>(function Input({ className = "", ...rest }, ref) {
   return <input ref={ref} className={`${control} ${className}`} {...rest} />;
@@ -35,7 +35,7 @@ export function Checkbox({ label, checked, onChange, disabled, name }: { label: 
   const id = name ?? autoId;
   return (
     <label htmlFor={id} className="inline-flex items-center gap-2 text-sm text-ink-700">
-      <input id={id} type="checkbox" name={name ?? id} className="h-4 w-4 rounded border-ink-300" checked={checked} disabled={disabled} onChange={(e) => onChange(e.target.checked)} />
+      <input id={id} type="checkbox" name={name ?? id} className="h-4 w-4 rounded border-ink-300 accent-brand-600" checked={checked} disabled={disabled} onChange={(e) => onChange(e.target.checked)} />
       {label}
     </label>
   );

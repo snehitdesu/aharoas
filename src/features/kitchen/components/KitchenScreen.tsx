@@ -83,10 +83,10 @@ export function KitchenScreen({ outletId, canUpdate }: { outletId: string; canUp
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex flex-wrap items-center gap-3 border-b border-ink-200 bg-white px-3 py-2">
+      <div className="flex flex-wrap items-center gap-3 border-b border-ink-200 bg-paper px-3 py-2">
         <label className="flex items-center gap-2 text-sm">
           Station
-          <select id="kds-station" name="station" value={stationId} onChange={(e) => setStationId(e.target.value)} className="h-9 rounded-md border border-ink-300 bg-white px-2 text-sm">
+          <select id="kds-station" name="station" value={stationId} onChange={(e) => setStationId(e.target.value)} className="h-9 rounded-md border border-ink-300 bg-paper px-2 text-sm">
             <option value="all">All stations</option>
             {stations.map((s) => (
               <option key={s.id} value={s.id}>{s.name}</option>
@@ -95,7 +95,7 @@ export function KitchenScreen({ outletId, canUpdate }: { outletId: string; canUp
         </label>
         <label className="flex items-center gap-2 text-sm">
           Refresh
-          <select id="kds-refresh" name="refresh" value={intervalSec} onChange={(e) => setIntervalSec(Number(e.target.value))} className="h-9 rounded-md border border-ink-300 bg-white px-2 text-sm">
+          <select id="kds-refresh" name="refresh" value={intervalSec} onChange={(e) => setIntervalSec(Number(e.target.value))} className="h-9 rounded-md border border-ink-300 bg-paper px-2 text-sm">
             {INTERVALS.map((s) => (
               <option key={s} value={s}>every {s}s</option>
             ))}
@@ -114,7 +114,7 @@ export function KitchenScreen({ outletId, canUpdate }: { outletId: string; canUp
             <section key={col.id} aria-labelledby={`col-${col.id}`} className={`flex min-h-0 flex-col rounded-xl border bg-ink-50 ${col.id === "ready" ? "border-ok-100" : col.id === "new" ? "border-brand-100" : "border-ink-200"}`}>
               <h2 id={`col-${col.id}`} className="flex items-center justify-between px-3 py-2 text-sm font-bold uppercase tracking-wide text-ink-700">
                 {col.title}
-                <span className="rounded-full bg-white px-2 text-xs tabular-nums shadow-xs">{columns[col.id].length}</span>
+                <span className="rounded-full bg-paper px-2 text-xs tabular-nums shadow-xs">{columns[col.id].length}</span>
               </h2>
               <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-2 pb-2">
                 {columns[col.id].length === 0 ? (

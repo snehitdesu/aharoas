@@ -19,6 +19,7 @@ import { MockPaymentProvider, signPaymentPayload } from "@/integrations/payment"
 import { MockAggregatorProvider, signAggregatorPayload } from "@/integrations/aggregator";
 import { POST } from "@/app/api/webhooks/[kind]/[provider]/route";
 import { num } from "@/domain/money";
+import { bindWebhook } from "./webhookBinding";
 
 const RUN = Date.now().toString(36);
 let orgId: string, outletA: string, outletB: string, outletC: string, org2Outlet: string, org2Id: string;
@@ -27,7 +28,7 @@ let mRice: string, dishCode: string;
 
 const posBody = (o: { eventId: string; ref: string; outletId: string; qty?: number; price?: number; phone?: string; placedAt?: Date }) =>
   JSON.stringify({
-    eventId: `${o.eventId}-${RUN}`, externalRef: `${o.ref}-${RUN}`, outletId: o.outletId, source: "PETPOOJA", channel: "DINE_IN", placedAt: (o.placedAt ?? new Date()).toISOString(),
+    eventId: `${o.eventId}-${RUN}`, externalRef: `${o.ref}-${RUN}`, storeId: o.outletId, outletId: o.outletId, source: "PETPOOJA", channel: "DINE_IN", placedAt: (o.placedAt ?? new Date()).toISOString(),
     items: [{ posItemCode: dishCode, name: "Dish", qty: o.qty ?? 2, unitPrice: o.price ?? 250, taxPct: 0 }],
     payments: [{ method: "UPI", amount: (o.qty ?? 2) * (o.price ?? 250), providerRef: `pp-${o.ref}-${RUN}` }],
     total: (o.qty ?? 2) * (o.price ?? 250), settled: true, ...(o.phone ? { customer: { name: "Guest", phone: o.phone } } : {}),
@@ -57,6 +58,11 @@ beforeAll(async () => {
   const recipe = await prisma.recipe.create({ data: { organizationId: orgId, name: "Dish", menuItemId: item.id } });
   const v = await prisma.recipeVersion.create({ data: { organizationId: orgId, recipeId: recipe.id, version: 1, status: "APPROVED", yieldQty: 1 } });
   await prisma.recipeLine.create({ data: { organizationId: orgId, recipeVersionId: v.id, componentType: "MATERIAL", materialId: mRice, qty: 0.2 } });
+  // H4 tenant bindings: each provider store/account id maps to exactly one tenant (store id = outlet id here).
+  for (const outletId of [outletA, outletB, outletC]) await bindWebhook({ kind: "POS", provider: "mock", organizationId: orgId, outletId, externalRef: outletId });
+  await bindWebhook({ kind: "POS", provider: "mock", organizationId: org2Id, outletId: org2Outlet, externalRef: org2Outlet });
+  await bindWebhook({ kind: "PAYMENT", provider: "mock", organizationId: orgId, externalRef: `acct-${orgId}` });
+  await bindWebhook({ kind: "AGGREGATOR", provider: "zomato", organizationId: orgId, outletId: outletC, externalRef: outletC });
 });
 
 afterAll(async () => { await prisma.$disconnect(); });
@@ -69,7 +75,7 @@ describe("POS webhooks", () => {
     expect(res).toMatchObject({ ok: true, status: "PROCESSED", httpStatus: 200 });
     const after = await counts(outletA);
     expect(after).toEqual({ orders: before.orders + 1, payments: before.payments + 1, ledger: before.ledger + 1, loyalty: before.loyalty + 1 });
-    const ev = await prisma.webhookEvent.findUniqueOrThrow({ where: { provider_eventId: { provider: "mock", eventId: `e1-${RUN}` } } });
+    const ev = await prisma.webhookEvent.findUniqueOrThrow({ where: { provider_eventId: { provider: "mock", eventId: `${outletA}:e1-${RUN}` } } });
     expect(ev.status).toBe("PROCESSED");
     expect(await prisma.auditLog.count({ where: { entityType: "WebhookEvent", entityId: ev.id, action: "IMPORT" } })).toBe(1);
   });
@@ -81,7 +87,7 @@ describe("POS webhooks", () => {
     const replay = await sendPOS(posBody({ eventId: "e1-replay", ref: "o1", outletId: outletA, phone: "9876500001" }));
     expect(replay).toMatchObject({ ok: true, status: "DUPLICATE" });
     expect(await counts(outletA)).toEqual(before);
-    expect((await prisma.webhookEvent.findUniqueOrThrow({ where: { provider_eventId: { provider: "mock", eventId: `e1-${RUN}` } } })).status).toBe("PROCESSED"); // not overwritten
+    expect((await prisma.webhookEvent.findUniqueOrThrow({ where: { provider_eventId: { provider: "mock", eventId: `${outletA}:e1-${RUN}` } } })).status).toBe("PROCESSED"); // not overwritten
   });
 
   it("rejects bad signatures and malformed payloads without side effects", async () => {
@@ -125,7 +131,7 @@ describe("payment webhooks", () => {
     return createPayment(ctx, o.id, { method: "ONLINE", amount, provider: "mock", providerRef: `${ref}-${RUN}` });
   }
   const sendPay = (body: object, sign = true) => {
-    const raw = JSON.stringify(body);
+    const raw = JSON.stringify({ accountId: `acct-${orgId}`, ...body });
     return receiveWebhook({ kind: "PAYMENT", provider: "mock", rawBody: raw, signature: sign ? signPaymentPayload(raw) : "nope" });
   };
 
@@ -156,6 +162,38 @@ describe("payment webhooks", () => {
     expect(await sendPay({ eventId: `pe4-${RUN}`, event: "payment.failed", providerRef: `mm-${RUN}`, amount: 500 })).toMatchObject({ status: "PROCESSED" });
     expect((await prisma.payment.findUniqueOrThrow({ where: { id: p.id } })).status).toBe("FAILED");
   });
+
+  it("payment.failed never overwrites a payment captured after the webhook read it (PENDING → SUCCESS race)", async () => {
+    const p = await pendingPayment("race", 450);
+    // The webhook reads the payment while it is still PENDING...
+    const stale = await prisma.payment.findUniqueOrThrow({ where: { id: p.id } });
+    // ...and a concurrent capture settles it before the webhook writes.
+    await verifyPayment(ctx, p.id, { providerRef: `race-${RUN}` });
+    expect((await prisma.payment.findUniqueOrThrow({ where: { id: p.id } })).status).toBe("SUCCESS");
+    // Replay that interleaving deterministically: the webhook's lookup returns the stale snapshot.
+    const staleDb = new Proxy(prisma, {
+      get(target, prop) {
+        if (prop === "payment") {
+          return new Proxy(target.payment, {
+            get(pt, pp) {
+              if (pp === "findUnique") return async (a: { where: Record<string, unknown> }) => ("organizationId_provider_providerRef" in a.where ? stale : pt.findUnique(a as never));
+              const v = Reflect.get(pt, pp, pt);
+              return typeof v === "function" ? v.bind(pt) : v;
+            },
+          });
+        }
+        const v = Reflect.get(target, prop, target);
+        return typeof v === "function" ? v.bind(target) : v;
+      },
+    });
+    const raw = JSON.stringify({ accountId: `acct-${orgId}`, eventId: `pe-race-${RUN}`, event: "payment.failed", providerRef: `race-${RUN}`, amount: 450 });
+    const res = await receiveWebhook({ kind: "PAYMENT", provider: "mock", rawBody: raw, signature: signPaymentPayload(raw) }, { db: staleDb });
+    expect(res.status).toBe("IGNORED");
+    const after = await prisma.payment.findUniqueOrThrow({ where: { id: p.id }, include: { order: true } });
+    expect(after.status).toBe("SUCCESS");
+    expect(after.order.status).toBe("PAID");
+    expect(await prisma.auditLog.count({ where: { entityType: "Payment", entityId: p.id, action: "PAYMENT", after: { contains: "webhook" } } })).toBe(0);
+  });
 });
 
 describe("aggregator webhooks", () => {
@@ -163,7 +201,7 @@ describe("aggregator webhooks", () => {
     const raw = JSON.stringify(body);
     return receiveWebhook({ kind: "AGGREGATOR", provider: "zomato", rawBody: raw, signature: signAggregatorPayload(raw) });
   };
-  const aggOrder = (id: string, outletId = outletC) => ({ eventId: `ae-${id}-${RUN}`, externalId: `z-${id}-${RUN}`, outletId, items: [{ posItemCode: dishCode, name: "Dish", qty: 4, unitPrice: 250 }], platformFee: 10 });
+  const aggOrder = (id: string, outletId = outletC) => ({ eventId: `ae-${id}-${RUN}`, externalId: `z-${id}-${RUN}`, storeId: outletId, outletId, items: [{ posItemCode: dishCode, name: "Dish", qty: 4, unitPrice: 250 }], platformFee: 10 });
 
   it("fails until the aggregator is configured, then processes on retry with the expected payout", async () => {
     expect(await sendAgg(aggOrder("1"))).toMatchObject({ status: "FAILED", reason: "Aggregator not configured" });
@@ -251,8 +289,8 @@ describe("reconciliation", () => {
   });
 
   it("AGGREGATOR: settlement vs expected payouts, with a settlement summary row", async () => {
-    await receiveWebhook({ kind: "AGGREGATOR", provider: "zomato", rawBody: JSON.stringify({ eventId: `ae-2-${RUN}`, externalId: `z-2-${RUN}`, outletId: outletC, items: [{ posItemCode: dishCode, name: "Dish", qty: 2, unitPrice: 250 }] }), signature: signAggregatorPayload(JSON.stringify({ eventId: `ae-2-${RUN}`, externalId: `z-2-${RUN}`, outletId: outletC, items: [{ posItemCode: dishCode, name: "Dish", qty: 2, unitPrice: 250 }] })) });
-    const raw3 = JSON.stringify({ eventId: `ae-3-${RUN}`, externalId: `z-3-${RUN}`, outletId: outletC, items: [{ posItemCode: dishCode, name: "Dish", qty: 1, unitPrice: 250 }] });
+    await receiveWebhook({ kind: "AGGREGATOR", provider: "zomato", rawBody: JSON.stringify({ eventId: `ae-2-${RUN}`, externalId: `z-2-${RUN}`, storeId: outletC, outletId: outletC, items: [{ posItemCode: dishCode, name: "Dish", qty: 2, unitPrice: 250 }] }), signature: signAggregatorPayload(JSON.stringify({ eventId: `ae-2-${RUN}`, externalId: `z-2-${RUN}`, storeId: outletC, outletId: outletC, items: [{ posItemCode: dishCode, name: "Dish", qty: 2, unitPrice: 250 }] })) });
+    const raw3 = JSON.stringify({ eventId: `ae-3-${RUN}`, externalId: `z-3-${RUN}`, storeId: outletC, outletId: outletC, items: [{ posItemCode: dishCode, name: "Dish", qty: 1, unitPrice: 250 }] });
     await receiveWebhook({ kind: "AGGREGATOR", provider: "zomato", rawBody: raw3, signature: signAggregatorPayload(raw3) });
     const aggregator = await prisma.aggregator.findFirstOrThrow({ where: { organizationId: orgId, name: "ZOMATO" } });
     const now = new Date();

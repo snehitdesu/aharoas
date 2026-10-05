@@ -8,7 +8,7 @@
 import { test, expect, type Request } from "@playwright/test";
 import {
   statePath, outletByCode, tableByCode, ordersOnTable, order, openPos, chooseTable, addSimpleItem, posCart, newItems, toast,
-  kdsColumn, ticketFor, sessionFor, materialByName, stockQty, ledgerForOrder, apiAs, CENTRAL, money,
+  kdsColumn, ticketFor, sessionFor, materialByName, stockQty, ledgerForOrder, apiAs, CENTRAL, money, confirmPasswordIfPrompted,
 } from "./helpers";
 
 test.use({ storageState: statePath("cashier") });
@@ -44,9 +44,12 @@ test.describe("order lifecycle", () => {
     await addSimpleItem(page, "Masala Chai");
     await posCart(page).getByRole("button", { name: "Increase Masala Chai" }).click();
     await expect(newItems(page).getByRole("listitem")).toHaveCount(1);
-    const fired = page.waitForResponse((r) => r.request().method() === "POST" && new URL(r.url()).pathname === `/api/orders/${orderId}/fire`);
+    // The round (lines + kitchen ticket) is one atomic, keyed request — a retry cannot add it twice.
+    const fired = page.waitForResponse((r) => r.request().method() === "POST" && new URL(r.url()).pathname === `/api/orders/${orderId}/rounds`);
     await page.getByRole("button", { name: "Send to kitchen" }).click();
-    expect((await fired).status()).toBe(200);
+    const round = await fired;
+    expect(round.status()).toBe(200);
+    expect(round.request().headers()["idempotency-key"]).toBeTruthy();
     await expect(toast(page, /^Sent to kitchen$/)).toBeVisible();
     o = await order(page.request, orderId);
     expect(o.items.map((i) => [i.name, Number(i.qty)]).sort()).toEqual([["Masala Chai", 2], ["Paneer Tikka", 1]]);
@@ -120,7 +123,8 @@ test.describe("order lifecycle", () => {
     await expect(dlg.getByRole("button", { name: "Cancel order" })).toBeDisabled(); // reason required
     await dlg.getByLabel("Reason (required)").fill("Guest left before ordering");
     await dlg.getByRole("button", { name: "Cancel order" }).click();
-    await expect(toast(page, "Order cancelled")).toBeVisible();
+    // Voiding an order is a sensitive action (H3): the manager re-enters their password.
+    await confirmPasswordIfPrompted(page, toast(page, "Order cancelled"));
     expect((await order(page.request, orderId)).status).toBe("CANCELLED");
     const flour = await materialByName(page.request, "Wheat Flour");
     expect(await ledgerForOrder(page.request, outlet.id, flour.id, orderId)).toHaveLength(0);

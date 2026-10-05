@@ -11,13 +11,13 @@ export function OutletSwitcher({ outlets, outletId, dark = false }: { outlets: S
   if (outlets.length === 0) return <span className="text-sm text-ink-500">No outlet access</span>;
   if (outlets.length === 1) {
     return (
-      <span className={`inline-flex items-center gap-1.5 text-sm font-medium ${dark ? "text-white" : "text-ink-900"}`}>
-        <Icon name="store" className={`h-4 w-4 ${dark ? "text-white/60" : "text-ink-400"}`} /> {outlets[0].name}
+      <span className={`inline-flex min-w-0 items-center gap-1.5 text-sm font-medium ${dark ? "text-white" : "text-ink-900"}`}>
+        <Icon name="store" className={`h-4 w-4 shrink-0 ${dark ? "text-white/60" : "text-ink-400"}`} /> <span className="max-w-[10rem] truncate sm:max-w-none">{outlets[0].name}</span>
       </span>
     );
   }
   return (
-    <label className={`flex items-center gap-1.5 rounded-md border pl-2.5 text-sm transition-colors ${dark ? "border-white/20 bg-white/5 focus-within:border-white/40" : "border-ink-300 bg-white hover:border-ink-400 focus-within:border-brand-400"}`}>
+    <label className={`flex items-center gap-1.5 rounded-md border pl-2.5 text-sm transition-colors ${dark ? "border-white/20 bg-white/5 focus-within:border-white/40" : "border-ink-300 bg-paper hover:border-ink-400 focus-within:border-brand-400"}`}>
       <Icon name="store" className={`h-4 w-4 ${dark ? "text-white/60" : "text-ink-400"}`} />
       <span className="sr-only">Outlet</span>
       <select

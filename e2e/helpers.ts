@@ -164,3 +164,28 @@ export async function e2eDb() {
   const url = process.env.E2E_DATABASE_URL ?? `file:${path.join(process.cwd(), "prisma", "e2e.db").replace(/\\/g, "/")}`;
   return new PrismaClient({ datasourceUrl: url });
 }
+
+// ---------------- step-up re-authentication (H3) ----------------
+
+export const reauthDialog = (page: Page) => page.getByRole("dialog", { name: "Confirm your password" });
+
+/** Answer the "Confirm your password" dialog. */
+export async function confirmPassword(page: Page, password = PASSWORD) {
+  const dlg = reauthDialog(page);
+  await expect(dlg).toBeVisible();
+  await dlg.getByLabel("Current password").fill(password);
+  await dlg.getByRole("button", { name: "Confirm" }).click();
+  await expect(dlg).toBeHidden();
+}
+
+/**
+ * Sensitive actions need a fresh confirmation, which then lasts a few minutes
+ * on that session. Specs sharing a stored session may or may not still hold
+ * one: confirm if asked, until `done` is visible.
+ */
+export async function confirmPasswordIfPrompted(page: Page, done: Locator, password = PASSWORD) {
+  const dlg = reauthDialog(page);
+  await expect(dlg.or(done).first()).toBeVisible();
+  if (await dlg.isVisible()) await confirmPassword(page, password);
+  await expect(done).toBeVisible();
+}

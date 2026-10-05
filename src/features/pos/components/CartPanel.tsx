@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import type { CartAction, CartState } from "@/features/pos/cart";
 import { POS_ORDER_TYPES } from "@/features/pos/cart";
 import { estimateTotals } from "@/features/pos/estimate";
@@ -8,6 +9,8 @@ import { formatMoney, formatQty, toNumber } from "@/lib/format";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 import { Icon } from "@/components/ui/Icon";
+import { Dialog } from "@/components/ui/Dialog";
+import { Textarea } from "@/components/ui/Form";
 
 type Props = {
   state: CartState;
@@ -32,9 +35,16 @@ export function CartPanel({ state, dispatch, tables, running, onPickTable, onPic
   const table = tables.find((t) => t.id === state.tableId);
   const estimate = estimateTotals(state.lines);
   const locked = Boolean(running); // order type/table are fixed once the order exists
+  // In-app dialog (Electron does not implement window.prompt).
+  const [noteFor, setNoteFor] = useState<{ key: string; name: string; text: string } | null>(null);
+  const saveNote = () => {
+    if (!noteFor) return;
+    dispatch({ type: "setLineNote", key: noteFor.key, notes: noteFor.text });
+    setNoteFor(null);
+  };
 
   return (
-    <section aria-label="Current order" className="flex min-h-0 flex-col bg-white">
+    <section aria-label="Current order" className="flex min-h-0 flex-1 flex-col bg-paper">
       <div className="space-y-2 border-b border-ink-200 p-3">
         <div role="radiogroup" aria-label="Order type" className="grid grid-cols-3 gap-1 rounded-md bg-ink-100 p-1">
           {POS_ORDER_TYPES.map((t) => (
@@ -45,7 +55,7 @@ export function CartPanel({ state, dispatch, tables, running, onPickTable, onPic
               aria-checked={state.orderType === t.value}
               disabled={locked}
               onClick={() => dispatch({ type: "setOrderType", orderType: t.value })}
-              className={`h-9 rounded text-sm font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-500 disabled:cursor-not-allowed ${state.orderType === t.value ? "bg-white text-ink-900 shadow-xs" : "text-ink-500 hover:text-ink-800"}`}
+              className={`h-9 rounded text-sm font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-500 disabled:cursor-not-allowed ${state.orderType === t.value ? "bg-paper text-ink-900 shadow-xs" : "text-ink-500 hover:text-ink-800"}`}
             >
               {t.label}
             </button>
@@ -72,6 +82,8 @@ export function CartPanel({ state, dispatch, tables, running, onPickTable, onPic
         {running && (
           <p className="flex items-center gap-2 text-xs text-ink-500">
             Running order <span className="font-mono">#{running.id.slice(-6).toUpperCase()}</span> <Badge tone="info">{running.status}</Badge>
+            {running.source === "QR" && <Badge tone={running.status === "OPEN" ? "warn" : "neutral"}>{running.status === "OPEN" ? "QR · awaiting acceptance" : "QR"}</Badge>}
+            <a href={`/pos/bill/${running.id}`} className="ml-auto font-medium text-brand-700 hover:underline">Bill</a>
           </p>
         )}
         {running && running.kots && running.kots.length > 0 && (
@@ -135,10 +147,7 @@ export function CartPanel({ state, dispatch, tables, running, onPickTable, onPic
                       size="sm"
                       variant="ghost"
                       aria-label={`Note for ${l.name}`}
-                      onClick={() => {
-                        const n = window.prompt("Kitchen note for this item", l.notes ?? "");
-                        if (n !== null) dispatch({ type: "setLineNote", key: l.key, notes: n });
-                      }}
+                      onClick={() => setNoteFor({ key: l.key, name: l.name, text: l.notes ?? "" })}
                     >
                       <Icon name="note" />
                     </Button>
@@ -171,6 +180,37 @@ export function CartPanel({ state, dispatch, tables, running, onPickTable, onPic
           </>
         )}
       </div>
+
+      <Dialog
+        open={noteFor !== null}
+        onClose={() => setNoteFor(null)}
+        title="Kitchen note"
+        description={noteFor ? `Printed on the KOT under ${noteFor.name}.` : undefined}
+        size="sm"
+        footer={
+          <>
+            <Button onClick={() => setNoteFor(null)}>Cancel</Button>
+            <Button variant="primary" onClick={saveNote}>Save note</Button>
+          </>
+        }
+      >
+        <label className="flex flex-col gap-1 text-sm">
+          <span className="font-medium text-ink-700">Note for this item</span>
+          <Textarea
+            data-autofocus
+            value={noteFor?.text ?? ""}
+            maxLength={200}
+            placeholder="e.g. less spicy, no onion"
+            onChange={(e) => setNoteFor((n) => (n ? { ...n, text: e.target.value } : n))}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                saveNote();
+              }
+            }}
+          />
+        </label>
+      </Dialog>
     </section>
   );
 }

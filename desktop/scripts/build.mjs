@@ -4,7 +4,7 @@
  *
  *   build/desktop/app/        → app.asar: main.js, preload-*.js, static/
  *   build/desktop/server/     → resources/server: Next.js standalone production
- *                               server + .next/static + migrations + dbtool.js
+ *                               server + .next-desktop/static + migrations + dbtool.js
  *   build/desktop/resources/  → installer resources (icon)
  *
  * Fails the build if the payload contains an .env file, a database file, or any
@@ -36,14 +36,17 @@ if (!skipNext) {
   run([require.resolve("prisma/build/index.js"), "generate"]);
   run([require.resolve("next/dist/bin/next"), "build"], { AHAROS_STANDALONE: "1", NEXT_TELEMETRY_DISABLED: "1", NODE_ENV: "production" });
 }
-const standalone = path.join(root, ".next", "standalone");
-if (!fs.existsSync(path.join(standalone, "server.js"))) throw new Error("No standalone build found (.next/standalone/server.js); run without --skip-next");
+// Must match distDir in next.config.mjs (AHAROS_STANDALONE builds).
+const NEXT_DIR = ".next-desktop";
+const nextDir = path.join(root, NEXT_DIR);
+const standalone = path.join(nextDir, "standalone");
+if (!fs.existsSync(path.join(standalone, "server.js"))) throw new Error(`No standalone build found (${NEXT_DIR}/standalone/server.js); run without --skip-next`);
 
 // 2. assemble the server payload
 step("assembling server payload");
 fs.rmSync(out, { recursive: true, force: true });
 fs.cpSync(standalone, serverDir, { recursive: true });
-fs.cpSync(path.join(root, ".next", "static"), path.join(serverDir, ".next", "static"), { recursive: true });
+fs.cpSync(path.join(nextDir, "static"), path.join(serverDir, NEXT_DIR, "static"), { recursive: true });
 if (fs.existsSync(path.join(root, "public"))) fs.cpSync(path.join(root, "public"), path.join(serverDir, "public"), { recursive: true });
 fs.cpSync(path.join(root, "prisma", "migrations"), path.join(serverDir, "migrations"), { recursive: true });
 
@@ -73,12 +76,26 @@ await build({ ...common, entryPoints: ["desktop/runtime/dbtool.ts"], outfile: pa
 
 // 4. static pages, icon, app package.json
 fs.cpSync(path.join(root, "desktop", "static"), path.join(appDir, "static"), { recursive: true });
+// The splash and setup pages use the web app's own typefaces: copy the latin
+// Inter / Fraunces files next/font self-hosted for the build (no CDN, CSP font-src 'self').
+{
+  const cssDir = path.join(nextDir, "static", "css");
+  const css = fs.readdirSync(cssDir).filter((f) => f.endsWith(".css")).map((f) => fs.readFileSync(path.join(cssDir, f), "utf8")).join("\n");
+  const fontsDir = path.join(appDir, "static", "fonts");
+  fs.mkdirSync(fontsDir, { recursive: true });
+  for (const family of ["Inter", "Fraunces"]) {
+    const face = [...css.matchAll(/@font-face\{([^}]*)\}/g)].map((m) => m[1]).find((f) => f.includes(`font-family:${family};`) && /unicode-range:u\+00\?\?/i.test(f));
+    const url = face?.match(/url\(\/_next\/static\/media\/([^)]+\.woff2)\)/)?.[1];
+    if (!url) throw new Error(`latin ${family} font not found in the Next build CSS`);
+    fs.copyFileSync(path.join(nextDir, "static", "media", url), path.join(fontsDir, `${family.toLowerCase()}-latin.woff2`));
+  }
+}
 fs.mkdirSync(resDir, { recursive: true });
 run([path.join(root, "desktop", "scripts", "make-icon.mjs"), resDir]);
 fs.copyFileSync(path.join(resDir, "icon.png"), path.join(appDir, "static", "icon.png"));
 fs.writeFileSync(
   path.join(appDir, "package.json"),
-  JSON.stringify({ name: "aharos", productName: "Aharos", version: pkg.version, description: "Aharos — Restaurant Operating System", author: "Aharos", main: "main.js", private: true }, null, 2)
+  JSON.stringify({ name: "aharos", productName: "RESTORA", version: pkg.version, description: "RESTORA — The Operating System for Restaurants", author: "RESTORA", main: "main.js", private: true }, null, 2)
 );
 
 // 5. secret scan

@@ -104,6 +104,21 @@ describe("order flow over HTTP", () => {
     expect(page.json.data.items).toHaveLength(1);
   });
 
+  it("refuses to verify a second full payment on a paid order (422, no overpayment)", async () => {
+    const orderId = (await call(Orders, "POST", "", { token: mgrA, body: { outletId: outletA, channel: "TAKEAWAY" } })).json.data.id;
+    await call(Orders, "POST", `${orderId}/items`, { token: mgrA, body: { name: "Vada", qty: 1, unitPrice: 100 } });
+    const a = (await call(Payments, "POST", "", { token: cashierA, body: { orderId, method: "CASH", amount: 100 } })).json.data;
+    const b = (await call(Payments, "POST", "", { token: cashierA, body: { orderId, method: "UPI", amount: 100 } })).json.data;
+    expect((await call(Payments, "POST", `${a.id}/verify`, { token: cashierA })).json.data.orderSettled).toBe(true);
+    const second = await call(Payments, "POST", `${b.id}/verify`, { token: cashierA });
+    expect(second.status).toBe(422);
+    expect(second.json.error.code).toBe("ValidationError");
+    expect(second.json.error.message).toBe("Cannot take payment for a PAID order");
+    expect(await prisma.payment.count({ where: { orderId, status: "SUCCESS" } })).toBe(1);
+    // A client-supplied status is ignored: it cannot force SUCCESS either.
+    expect((await call(Payments, "POST", "", { token: cashierA, body: { orderId, method: "CASH", amount: 100, status: "SUCCESS" } })).status).toBe(422);
+  });
+
   it("enforces RBAC, outlet and organization scope", async () => {
     const created = await call(Orders, "POST", "", { token: mgrA, body: { outletId: outletA } });
     const orderId = created.json.data.id;

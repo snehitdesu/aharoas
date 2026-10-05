@@ -1,6 +1,6 @@
 # Aharos Desktop — Installable Restaurant Software Architecture (Phase 7)
 
-Status: Windows build implemented (`npm run desktop:dist`). This document is the
+Status: Windows build implemented (`npm run desktop:dist`); macOS build configured (`npm run desktop:dist:mac`, see desktop-release.md — not yet verified on a Mac). This document is the
 architecture plan the implementation follows; sections marked **Planned** are
 designed but not built yet.
 

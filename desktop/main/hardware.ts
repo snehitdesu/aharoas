@@ -4,8 +4,10 @@
  *
  * Printers (receipt / KOT / kitchen) implement PrinterDriver:
  *  - "system": renders the job's HTML in a hidden, script-less window and prints
- *    it silently to a named Windows printer (any installed thermal printer driver).
- *  - "mock":   development/no-hardware driver. Writes the job to print-spool\ and
+ *    it silently to a named OS printer through Chromium's printing stack — the
+ *    Windows print spooler or macOS CUPS (any installed thermal printer driver).
+ *    No platform-specific API is called directly.
+ *  - "mock":   development/no-hardware driver. Writes the job to print-spool/ and
  *    reports `simulated: true` — it never claims that paper came out.
  * ESC/POS raw printing (cash-drawer kick, cutter) is the planned "escpos" driver.
  */
@@ -69,7 +71,7 @@ export function escapeHtml(s: string): string {
 export function testPage(version: string, now = new Date()): PrintJob {
   return {
     kind: "test",
-    title: "Aharos test print",
-    html: `<!doctype html><meta charset="utf-8"><body style="font:12px monospace;width:72mm"><h3>Aharos</h3><p>Printer test</p><p>${escapeHtml(now.toLocaleString())}</p><p>v${escapeHtml(version)}</p></body>`,
+    title: "RESTORA test print",
+    html: `<!doctype html><meta charset="utf-8"><body style="font:12px monospace;width:72mm"><h3>RESTORA</h3><p>Printer test</p><p>${escapeHtml(now.toLocaleString())}</p><p>v${escapeHtml(version)}</p></body>`,
   };
 }

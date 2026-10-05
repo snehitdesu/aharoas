@@ -11,7 +11,7 @@ import { useState } from "react";
 import { api } from "@/lib/api/client";
 import { useQuery, usePaged } from "@/lib/hooks/useApi";
 import { useShell, useOutletId } from "@/lib/shellContext";
-import { newIdempotencyKey } from "@/lib/idempotency";
+import { createKeyedSubmitter, newIdempotencyKey } from "@/lib/idempotency";
 import { formatDate, formatDateTime, formatMoney, formatPct, humanize, isoDay, shortRef } from "@/lib/format";
 import { PaymentMethod, PaymentStatus, PettyCashType } from "@/constants/enums";
 import { Button } from "@/components/ui/Button";
@@ -32,7 +32,7 @@ export type PaymentRow = { id: string; outletId: string; orderId: string; method
 type RefundRow = { id: string; paymentId: string; amount: number; reason: string | null; providerRef: string | null; createdAt: string; payment?: { method: string; orderId: string; order?: { invoiceNo: string | null } | null } };
 type Expense = { id: string; category: string; amount: string; description: string | null; paidVia: string; spentAt: string };
 type PettyRow = { id: string; type: string; amount: number; category: string | null; reason: string | null; createdAt: string };
-type DrawerRow = { id: string; status: string; openingFloat: number; closingCount: number | null; openedAt: string; closedAt: string | null; openedByName: string | null };
+type DrawerRow = { id: string; status: string; openingFloat: number; closingCount: number | null; openedAt: string; closedAt: string | null; openedByName: string | null; expectedCash?: number | null; variance?: number | null };
 type ReconLine = { id: string; method: string; expected: string; actual: string; difference: string; note: string | null };
 type Recon = { id: string; businessDate: string; kind: string; status: string; notes: string | null; createdAt: string; lines?: ReconLine[] };
 
@@ -216,11 +216,20 @@ export function PaymentsScreen() {
 // Expenses
 // ============================================================
 
-const EXPENSE_CATEGORIES = ["RENT", "UTILITIES", "SALARY", "REPAIRS", "MARKETING", "SUPPLIES", "MISC"];
+/** Shown until the organization's managed list loads (the server provisions these defaults). */
+const EXPENSE_CATEGORIES = ["RENT", "UTILITIES", "GAS", "SALARY", "REPAIRS", "MARKETING", "SUPPLIES", "MISC"];
+
+/** The organization's active expense categories (server-managed). */
+function useExpenseCategories(enabled = true) {
+  const q = useQuery<Array<{ id: string; name: string }>>(enabled ? "/api/finance/expense-categories" : null);
+  return q.data?.length ? q.data.map((c) => c.name) : EXPENSE_CATEGORIES;
+}
 const PAID_VIA = ["CASH", "BANK", "UPI", "PETTY_CASH"];
 
 function ExpenseDialog({ open, onClose, onDone }: { open: boolean; onClose: () => void; onDone: () => void }) {
   const outletId = useOutletId();
+  const categories = useExpenseCategories(open);
+  const [submitKeyed] = useState(() => createKeyedSubmitter("exp"));
   const [category, setCategory] = useState("UTILITIES");
   const [amount, setAmount] = useState("");
   const [paidVia, setPaidVia] = useState("CASH");
@@ -228,10 +237,14 @@ function ExpenseDialog({ open, onClose, onDone }: { open: boolean; onClose: () =
   const [description, setDescription] = useState("");
   return (
     <FormDialog open={open} onClose={onClose} title="Record expense" submitLabel="Save expense"
-      onSubmit={() => api("/api/finance/expenses", { method: "POST", body: { outletId, category, amount: Number(amount), paidVia, spentAt: spentAt ? new Date(spentAt).toISOString() : undefined, description: opt(description) } })}
+      onSubmit={() => {
+        // One key per submitted body: a double click / lost response cannot record the expense twice.
+        const body = { outletId, category, amount: Number(amount), paidVia, spentAt: spentAt ? new Date(spentAt).toISOString() : undefined, description: opt(description) };
+        return submitKeyed(body, (idempotencyKey) => api("/api/finance/expenses", { method: "POST", body, idempotencyKey }));
+      }}
       onDone={() => { setAmount(""); setDescription(""); onDone(); }}>
       <div className="grid gap-3 sm:grid-cols-2">
-        <Field label="Category" name="category" required><Select value={category} onChange={(e) => setCategory(e.target.value)}>{EXPENSE_CATEGORIES.map((c) => <option key={c} value={c}>{humanize(c)}</option>)}</Select></Field>
+        <Field label="Category" name="category" required><Select value={category} onChange={(e) => setCategory(e.target.value)}>{categories.map((c) => <option key={c} value={c}>{humanize(c)}</option>)}</Select></Field>
         <Field label="Amount" name="amount" required><Input type="number" inputMode="decimal" step="0.01" min="0.01" required value={amount} onChange={(e) => setAmount(e.target.value)} /></Field>
         <Field label="Paid via" name="paidVia"><Select value={paidVia} onChange={(e) => setPaidVia(e.target.value)}>{PAID_VIA.map((c) => <option key={c} value={c}>{humanize(c)}</option>)}</Select></Field>
         <Field label="Spent at" name="spentAt" hint="Defaults to now"><Input type="datetime-local" value={spentAt} onChange={(e) => setSpentAt(e.target.value)} /></Field>
@@ -275,6 +288,15 @@ export function ExpensesScreen() {
           { key: "de", header: "Description", cell: (r) => r.description ?? "—" },
           { key: "p", header: "Paid via", cell: (r) => humanize(r.paidVia) },
           { key: "a", header: "Amount", numeric: true, cell: (r) => formatMoney(r.amount) },
+          {
+            key: "x", header: "", cell: (r) => can("expense.manage") ? (
+              // Corrections are a void (+ a new entry); the server asks for a fresh password confirmation.
+              <ActionButton size="sm" variant="ghost" action={(note) => api(`/api/finance/expenses/${r.id}/void`, { method: "POST", body: { reason: note } })} success="Expense voided" onDone={reload}
+                confirm={{ title: "Void this expense?", message: `${humanize(r.category)} · ${formatMoney(r.amount)}. It leaves every total; petty cash is returned.`, danger: true, confirmLabel: "Void", requireNote: true, noteLabel: "Reason" }}>
+                Void
+              </ActionButton>
+            ) : null,
+          },
         ]} />
       <Pager page={page + 1} hasPrev={page > 0 && !list.loading} hasNext={(list.data?.length ?? 0) >= EXPENSE_PAGE && !list.loading} prev={() => setPage((p) => Math.max(0, p - 1))} next={() => setPage((p) => p + 1)} />
       <ExpenseDialog open={open} onClose={() => setOpen(false)} onDone={reload} />
@@ -288,6 +310,7 @@ export function ExpensesScreen() {
 
 function PettyDialog({ open, onClose, onDone }: { open: boolean; onClose: () => void; onDone: () => void }) {
   const outletId = useOutletId();
+  const [submitKeyed] = useState(() => createKeyedSubmitter("petty"));
   const [type, setType] = useState("EXPENSE");
   const [amount, setAmount] = useState("");
   const [direction, setDirection] = useState("OUT");
@@ -296,7 +319,10 @@ function PettyDialog({ open, onClose, onDone }: { open: boolean; onClose: () => 
   return (
     <FormDialog open={open} onClose={onClose} title="Petty cash entry" submitLabel="Record"
       description="Amounts are entered as positive numbers; the entry type decides whether cash goes in or out."
-      onSubmit={() => api("/api/finance/petty-cash", { method: "POST", body: { outletId, type, amount: Number(amount), direction: type === "ADJUST" ? direction : undefined, category: opt(category), reason: opt(reason) } })}
+      onSubmit={() => {
+        const body = { outletId, type, amount: Number(amount), direction: type === "ADJUST" ? direction : undefined, category: opt(category), reason: opt(reason) };
+        return submitKeyed(body, (idempotencyKey) => api("/api/finance/petty-cash", { method: "POST", body, idempotencyKey }));
+      }}
       onDone={() => { setAmount(""); setReason(""); onDone(); }}>
       <div className="grid gap-3 sm:grid-cols-2">
         <Field label="Type" name="type" required><Select value={type} onChange={(e) => setType(e.target.value)}>{PettyCashType.values.map((t) => <option key={t} value={t}>{humanize(t)}</option>)}</Select></Field>
@@ -352,6 +378,28 @@ function CloseDrawerDialog({ session, onClose, onDone }: { session: DrawerRow; o
   );
 }
 
+/** Non-sale cash into / out of the open drawer (float top-up, cash paid out). */
+function DrawerMovementDialog({ session, onClose, onDone }: { session: DrawerRow; onClose: () => void; onDone: () => void }) {
+  const [submitKeyed] = useState(() => createKeyedSubmitter("drw"));
+  const [type, setType] = useState<"PAY_IN" | "PAY_OUT">("PAY_OUT");
+  const [amount, setAmount] = useState("");
+  const [reason, setReason] = useState("");
+  return (
+    <FormDialog open onClose={onClose} title="Cash in / out" submitLabel="Record" description="Cash that is not a sale or a refund. A pay-out cannot exceed what the drawer should hold."
+      onSubmit={() => {
+        const body = { type, amount: Number(amount), reason };
+        return submitKeyed(body, (idempotencyKey) => api(`/api/finance/drawer/${session.id}/movements`, { method: "POST", body, idempotencyKey }));
+      }}
+      onDone={onDone}>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field label="Type" name="type" required><Select value={type} onChange={(e) => setType(e.target.value as "PAY_IN" | "PAY_OUT")}><option value="PAY_OUT">Cash out (pay-out)</option><option value="PAY_IN">Cash in (pay-in)</option></Select></Field>
+        <Field label="Amount" name="amount" required><Input type="number" inputMode="decimal" step="0.01" min="0.01" required value={amount} onChange={(e) => setAmount(e.target.value)} /></Field>
+      </div>
+      <Field label="Reason" name="reason" required><Input value={reason} onChange={(e) => setReason(e.target.value)} minLength={3} maxLength={300} required /></Field>
+    </FormDialog>
+  );
+}
+
 function OpenDrawerDialog({ open, onClose, onDone }: { open: boolean; onClose: () => void; onDone: () => void }) {
   const outletId = useOutletId();
   const [float, setFloat] = useState("");
@@ -367,6 +415,7 @@ export function DrawerScreen() {
   const [status, setStatus] = useState("");
   const [opening, setOpening] = useState(false);
   const [closing, setClosing] = useState<DrawerRow | null>(null);
+  const [moving, setMoving] = useState<DrawerRow | null>(null);
   const list = usePaged<DrawerRow>(outletId ? "/api/finance/drawer" : null, { outletId: outletId ?? undefined, status: status || undefined });
   const hasOpen = list.items.some((r) => r.status === "OPEN");
   return (
@@ -380,13 +429,16 @@ export function DrawerScreen() {
           { key: "b", header: "By", cell: (r) => r.openedByName ?? "—" },
           { key: "f", header: "Float", numeric: true, cell: (r) => formatMoney(r.openingFloat) },
           { key: "c", header: "Closed", cell: (r) => formatDateTime(r.closedAt, outlet?.timezone) },
+          { key: "e", header: "Expected", numeric: true, cell: (r) => (r.expectedCash == null ? "—" : formatMoney(r.expectedCash)) },
           { key: "n", header: "Counted", numeric: true, cell: (r) => (r.closingCount === null ? "—" : formatMoney(r.closingCount)) },
+          { key: "v", header: "Variance", numeric: true, cell: (r) => (r.variance == null ? "—" : <span className={r.variance === 0 ? "" : "text-bad-600"}>{formatMoney(r.variance)}</span>) },
           { key: "s", header: "Status", cell: (r) => <Badge tone={r.status === "OPEN" ? "info" : "neutral"}>{humanize(r.status)}</Badge> },
-          { key: "x", header: "", cell: (r) => (r.status === "OPEN" && can("payment.take") ? <Button size="sm" variant="primary" onClick={() => setClosing(r)}>Close</Button> : null) },
+          { key: "x", header: "", cell: (r) => (r.status === "OPEN" && can("payment.take") ? <span className="flex gap-2"><Button size="sm" onClick={() => setMoving(r)}>Cash in/out</Button><Button size="sm" variant="primary" onClick={() => setClosing(r)}>Close</Button></span> : null) },
         ]} />
       <Pager {...list} />
       <OpenDrawerDialog open={opening} onClose={() => setOpening(false)} onDone={list.reload} />
       {closing && <CloseDrawerDialog session={closing} onClose={() => setClosing(null)} onDone={list.reload} />}
+      {moving && <DrawerMovementDialog session={moving} onClose={() => setMoving(null)} onDone={list.reload} />}
     </>
   );
 }

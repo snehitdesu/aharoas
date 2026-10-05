@@ -3,6 +3,15 @@
 _Audit of 2026-10-01 (production verification & hardening pass). Every "verified"
 item below was executed, not inferred; see PROJECT_STATUS.md for exact results._
 
+## Status update — Phases 9–10 (2026-10-05)
+
+Supersedes the per-item status below where they differ:
+- **M7 database roles:** `scripts/ops/pg-roles.sql` creates `restora_owner` / `restora_app` (DML only, append-only `AuditLog` + `InventoryLedger` enforced, session timeouts) / `restora_backup`; verified in the DR drill. Applying it per deployment remains an operator step.
+- **M8 backups:** encrypted, verified backups (`pg-backup.mjs`), guarded restore (`pg-restore.mjs`), backup→destroy→restore drill **11/11** and PITR drill **7/7** executed; RPO/RTO, schedule and procedure in `docs/production-infrastructure.md` §8. Scheduling the job and WAL archiving / managed PITR remain operator steps.
+- **M11 health:** `/api/health/live`, `/api/health/ready` (DB + migrations), metrics, graceful shutdown — verified (`verify-runtime.mjs` 18/18).
+- **Observability** ("can be added after"): structured redacting JSON logs with request ids, metrics, alert webhook — done (Phase 9).
+- **M4 (HTTPS), M5 (proxy hops), M6 (one instance), M9 (secrets/providers), M10 (EXPORT_DIR)** remain per-deployment configuration, enforced or warned by startup validation; see `docs/release-checklist.md`.
+
 ## Verdict
 
 **Ready for a controlled production deployment once the MUST items below are done.**
@@ -46,7 +55,7 @@ Small production-security gaps from the audit, now closed at the application lay
 |---|------|-----|--------|
 | M1 | **Account provisioning.** New staff got an unusable placeholder password with no invite / set-password / reset flow, so nobody could sign in to a fresh production database. | Nobody can sign in to a fresh production database. | ✅ done (Phase 5A): `npm run bootstrap:owner` creates the first organization, outlet and OWNER on an **empty** database only (config via `BOOTSTRAP_*` env, password via `--password-stdin` or a hidden prompt); new staff get a one-time setup link (Team → Add staff), managers can issue a fresh link (Team → Password link); `/account/password` changes a password and signs out other sessions. **Still open:** no email/SMS delivery — self-service `/forgot-password` records the request but sends nothing until a delivery provider is registered (`setPasswordLinkDelivery`); links are handed over by a manager. |
 | M2 | **Upgrade Next.js** (15.1.4 had a critical RCE in the React flight protocol, a middleware authorization bypass, Windows/Image-optimizer RCEs, SSRF, cache poisoning). | Remote code execution. | ✅ done: next 15.5.27, react/react-dom 19.0.8 (lockfile updated). **Run `npm ci` after stopping the dev server** — local node_modules still has 15.1.4. |
-| M3 | **Switch the schema to PostgreSQL and commit a PostgreSQL migration history.** `prisma/schema.prisma` is SQLite; the PostgreSQL schema and `baseline.sql` live in `/prisma/postgres/`, which is **git-ignored**. | Production migrations must be version-controlled and replayable. | ⚠️ baseline regenerated and verified (`migrate deploy` on an empty PostgreSQL 16 → `migrate diff`: no difference). Still to do: provider switch + commit `prisma/migrations/<ts>_baseline` for PostgreSQL (see docs/postgres.md). Consider explicit `@db.Decimal` precision at the same time. |
+| M3 | **Switch the schema to PostgreSQL and commit a PostgreSQL migration history.** `prisma/schema.prisma` is SQLite; the PostgreSQL schema and `baseline.sql` live in `/prisma/postgres/`, which is **git-ignored**. | Production migrations must be version-controlled and replayable. | ✅ H5: PostgreSQL history committed in `prisma/postgres/migrations` (baseline `20261004130000_baseline`, explicit `@db.Decimal` precision); `npm run db:pg:deploy` = `migrate deploy`; verified on fresh PostgreSQL 16 databases (deploy, no drift, full suite). H6: the CI `postgres` job runs deploy → status → drift (shadow) → full suite; configured and actionlint-clean, **not yet executed on GitHub**. |
 | M4 | **HTTPS termination** (reverse proxy / load balancer). | The session cookie is `Secure` in production: over plain HTTP the browser drops it and **login silently fails**. HSTS is sent. | infra |
 | M5 | **Set `TRUSTED_PROXY_HOPS`** to the number of proxies in front of the app (default 1). | Client IP for login rate limits and audit entries. | code ✅ (was trusting the client-controlled left side of X-Forwarded-For) — config per deployment |
 | M6 | **Run exactly ONE app instance.** | Rate limits are in-memory and export files are on local disk; more instances silently weaken limits and break export downloads. | constraint until a shared store exists |

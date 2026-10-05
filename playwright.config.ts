@@ -43,6 +43,8 @@ export default defineConfig({
     // NODE_ENV=production exercises the real build; provide a non-placeholder
     // AUTH_SECRET so production env validation (instrumentation) passes for the
     // disposable e2e deployment.
-    env: { DATABASE_URL: E2E_DB_URL, NODE_ENV: "production", AUTH_SECRET: "e2e-test-auth-secret-not-a-real-production-value-0123456789" },
+    // ALLOW_MOCK_PROVIDERS: this disposable, non-public deployment uses the
+    // development payment gateway (guest QR online payments, e2e/qr-transaction.spec.ts).
+    env: { DATABASE_URL: E2E_DB_URL, NODE_ENV: "production", AUTH_SECRET: "e2e-test-auth-secret-not-a-real-production-value-0123456789", ALLOW_MOCK_PROVIDERS: "true" },
   },
 });

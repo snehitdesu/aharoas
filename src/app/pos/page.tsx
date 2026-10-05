@@ -2,16 +2,18 @@ import { requireShell } from "@/lib/auth/shell";
 import { OperatorBar } from "@/components/layout/OperatorBar";
 import { ForbiddenPage } from "@/components/ui/States";
 import { ToastProvider } from "@/components/ui/Toast";
+import { ReauthProvider } from "@/components/auth/ReauthProvider";
 import { PosScreen } from "@/features/pos/components/PosScreen";
 
 export const dynamic = "force-dynamic";
-export const metadata = { title: "POS — Aharos" };
+export const metadata = { title: "POS — RESTORA" };
 
 export default async function PosPage() {
   const { shell } = await requireShell("/pos");
   const has = new Set(shell.permissions);
   return (
     <ToastProvider>
+      <ReauthProvider>
       <div className="flex h-screen flex-col overflow-hidden bg-ink-100">
         <OperatorBar shell={shell} title="POS" />
         {!shell.outletId ? (
@@ -32,6 +34,7 @@ export default async function PosPage() {
           />
         )}
       </div>
+      </ReauthProvider>
     </ToastProvider>
   );
 }

@@ -1,7 +1,7 @@
 import { AuthShell } from "@/components/layout/AuthShell";
 import { ForgotPasswordForm } from "./ForgotPasswordForm";
 
-export const metadata = { title: "Reset password — Aharos" };
+export const metadata = { title: "Reset password — RESTORA" };
 
 export default function ForgotPasswordPage() {
   return (

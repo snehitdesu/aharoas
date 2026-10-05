@@ -1,6 +1,25 @@
-# Aharos — Project Status
+# RESTORA (working name Aharos) — Project Status
 
-_Last updated: 2026-10-01 — Phase 5B security & architecture hardening (organization isolation on writes, notification provider production safety, export download re-authorization, production env validation) on top of Phase 5A account provisioning and the earlier production verification pass. Readiness checklist: `docs/production-readiness.md`._
+_Last updated: 2026-10-05 — V1 release work (Phases 9–14). The sections from
+"Stack" downward are the historical record up to Phase 5B; current, verified
+status is in the phase reports listed here._
+
+## Current status
+| Phase | Report | Status |
+|---|---|---|
+| 2 Transactions · 3 Inventory/procurement · 4 Finance · 5 Analytics · 6 Staff/mobile · 7 Integrations | `docs/phase2…7-*.md` | complete (per reports) |
+| 8 Multi-outlet / multi-restaurant | — | **deferred** (not part of V1) |
+| 9 Production infrastructure | `docs/phase9-final-report.md` | PASS WITH DOCUMENTED LIMITATIONS |
+| 10 Final release audit | `docs/phase10-final-release.md` | PASS WITH DOCUMENTED LIMITATIONS |
+| 11 UI/UX · 12 Beta QA · 13 Compliance | `docs/phase11-uiux.md`, `docs/phase12-beta-qa.md`, `docs/phase13-compliance.md` | PASS WITH DOCUMENTED LIMITATIONS |
+| 14 Production launch | `docs/phase14-production-launch.md` | PASS WITH DOCUMENTED LIMITATIONS — deployment **pending external infrastructure** |
+| V1 summary | `docs/RESTORA-V1-FINAL-REPORT.md` | **V1 READY WITH DOCUMENTED LIMITATIONS** (release candidate 1.0.0-rc.1) |
+
+Latest full verification (Phase 14, 2026-10-05, 1.0.0-rc.1): Vitest 887 passed on
+SQLite and 865 passed on PostgreSQL 16 (0 failed), browser E2E 77/77 on both
+databases (one intermittent SQLite failure in a first run, see the Phase 14 report),
+desktop E2E 7/7, packaged-desktop security 23/23, no migration drift; DR drill 11/11,
+PITR 7/7, staging deployment rehearsal smoke 18/18.
 
 ## Stack
 Next.js 15.5.27 (App Router) · React 19.0.8 · TypeScript (strict) · Prisma 6 · SQLite (dev/test) / PostgreSQL 16 (target, **executed**) ·

@@ -1,10 +1,12 @@
 "use client";
 
+import { useState } from "react";
 import type { KdsTicket } from "@/features/kitchen/kds";
 import { canCancel, primaryAction, ticketLabel, urgency } from "@/features/kitchen/kds";
 import type { KOTStatus } from "@/constants/enums";
 import { formatElapsed, formatQty, shortRef } from "@/lib/format";
 import { Button } from "@/components/ui/Button";
+import { Dialog } from "@/components/ui/Dialog";
 
 const URGENCY: Record<"normal" | "warn" | "late", string> = {
   normal: "border-ink-200",
@@ -16,8 +18,9 @@ const URGENCY: Record<"normal" | "warn" | "late", string> = {
 export function TicketCard({ ticket, now, pending, canUpdate, onAction }: { ticket: KdsTicket; now: number; pending: boolean; canUpdate: boolean; onAction: (to: KOTStatus) => void }) {
   const action = primaryAction(ticket.status);
   const level = urgency(ticket.createdAt, now);
+  const [confirmVoid, setConfirmVoid] = useState(false);
   return (
-    <article aria-label={`KOT ${ticket.number}, ${ticketLabel(ticket)}`} className={`flex flex-col rounded-xl border-2 bg-white shadow-xs ${URGENCY[level]}`}>
+    <article aria-label={`KOT ${ticket.number}, ${ticketLabel(ticket)}`} className={`flex flex-col rounded-xl border-2 bg-paper shadow-xs ${URGENCY[level]}`}>
       <header className="flex items-start justify-between gap-2 border-b border-ink-100 px-3 py-2">
         <div>
           <p className="text-lg font-bold leading-tight">KOT {ticket.number}</p>
@@ -49,19 +52,34 @@ export function TicketCard({ ticket, now, pending, canUpdate, onAction }: { tick
             </Button>
           )}
           {canCancel(ticket.status) && (
-            <Button
-              variant="ghost"
-              size="lg"
-              disabled={pending}
-              onClick={() => {
-                if (window.confirm(`Cancel KOT ${ticket.number}? The kitchen will stop preparing it.`)) onAction("CANCELLED");
-              }}
-            >
+            <Button variant="ghost" size="lg" disabled={pending} onClick={() => setConfirmVoid(true)}>
               Void
             </Button>
           )}
         </footer>
       )}
+      <Dialog
+        open={confirmVoid}
+        onClose={() => setConfirmVoid(false)}
+        title={`Void KOT ${ticket.number}?`}
+        size="sm"
+        footer={
+          <>
+            <Button onClick={() => setConfirmVoid(false)} data-autofocus>Keep ticket</Button>
+            <Button
+              variant="danger"
+              onClick={() => {
+                setConfirmVoid(false);
+                onAction("CANCELLED");
+              }}
+            >
+              Void KOT
+            </Button>
+          </>
+        }
+      >
+        <p className="text-sm text-ink-700">The kitchen will stop preparing {ticketLabel(ticket)}. This cannot be undone from the KDS.</p>
+      </Dialog>
     </article>
   );
 }

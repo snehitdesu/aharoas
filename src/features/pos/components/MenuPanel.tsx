@@ -28,7 +28,7 @@ export const MenuPanel = forwardRef<HTMLInputElement, Props>(function MenuPanel(
 
   return (
     <section aria-label="Menu" className="flex min-h-0 flex-1 flex-col">
-      <div className="flex items-center gap-2 border-b border-ink-200 bg-white p-2">
+      <div className="flex items-center gap-2 border-b border-ink-200 bg-paper p-2">
         <label className="relative flex-1">
           <span className="sr-only">Search menu</span>
           <Icon name="search" className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-ink-500" />
@@ -52,7 +52,7 @@ export const MenuPanel = forwardRef<HTMLInputElement, Props>(function MenuPanel(
         </label>
       </div>
 
-      <div role="tablist" aria-label="Categories" className="flex gap-1 overflow-x-auto border-b border-ink-200 bg-white px-2 py-1.5">
+      <div role="tablist" aria-label="Categories" className="flex gap-1 overflow-x-auto border-b border-ink-200 bg-paper px-2 py-1.5">
         {[{ id: "all", name: "All" }, ...categories].map((c) => (
           <button
             key={c.id}
@@ -81,7 +81,7 @@ export const MenuPanel = forwardRef<HTMLInputElement, Props>(function MenuPanel(
                     disabled={!ok}
                     onClick={() => onPick(item)}
                     aria-label={`${item.name}, ${formatMoney(item.effectivePrice)}${ok ? "" : item.offered ? ", sold out" : ", not offered here"}`}
-                    className="flex h-24 w-full flex-col justify-between rounded-lg border border-ink-200 bg-white p-2.5 text-left shadow-xs transition-colors hover:border-brand-500 hover:bg-brand-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-500 disabled:cursor-not-allowed disabled:bg-ink-100 disabled:opacity-60"
+                    className="flex h-24 w-full flex-col justify-between rounded-lg border border-ink-200 bg-paper p-2.5 text-left shadow-xs transition-colors hover:border-brand-500 hover:bg-brand-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-500 disabled:cursor-not-allowed disabled:bg-ink-100 disabled:opacity-60"
                   >
                     <span className="flex items-start gap-1.5">
                       <span aria-hidden className={`mt-1 h-2.5 w-2.5 shrink-0 rounded-sm border ${item.isVeg ? "border-ok-500 bg-ok-500/70" : "border-bad-500 bg-bad-500/70"}`} />

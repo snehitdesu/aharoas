@@ -60,7 +60,7 @@ describe("materials", () => {
     expect((await updateMaterial(admin, egg.id, { baseUnitId: pc })).baseUnitId).toBe(pc); // no stock yet
     await createUnitConversion(admin, { fromUnitId: pc, toUnitId: g, factor: 50, materialId: egg.id }); // material-specific cross-kind is fine
 
-    vendorId = (await createVendor(admin, { name: `Grain Co ${RUN}`, gstin: "29ABCDE1234F1Z5", bankAccount: "123456789012", bankIfsc: "HDFC0001234" })).id;
+    vendorId = (await createVendor(admin, { name: `Grain Co ${RUN}`, gstin: "29ABCDE1234F1ZW", bankAccount: "123456789012", bankIfsc: "HDFC0001234" })).id;
     const grn = await createGRN(owner, { outletId: outletA, vendorId, lines: [{ materialId: riceId, qty: 10, rate: 50 }] });
     await postGRN(owner, grn.id);
     await expect(updateMaterial(admin, riceId, { baseUnitId: g })).rejects.toThrow(/Base unit cannot change/);

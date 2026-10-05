@@ -127,6 +127,30 @@ describe("POS", () => {
     expect(keys[0]).toBe(keys[1]);
   });
 
+  it("adds a kitchen note through an in-app dialog (Electron has no window.prompt) and sends it with the line", async () => {
+    const user = userEvent.setup();
+    const prompt = vi.fn(() => {
+      throw new Error("window.prompt is not available in the desktop app");
+    });
+    vi.stubGlobal("prompt", prompt);
+    handler = posBackend({ "POST /api/orders": () => ok({ id: "cmorder000555", tableId: null, status: "SENT", items: [], total: "126" }) });
+    renderPos();
+    await user.click(await screen.findByRole("button", { name: /Masala Dosa/ }));
+    await user.click(screen.getByRole("button", { name: "Note for Masala Dosa" }));
+    const dlg = screen.getByRole("dialog", { name: "Kitchen note" });
+    await user.type(within(dlg).getByLabelText("Note for this item"), "extra crispy");
+    await user.click(within(dlg).getByRole("button", { name: "Save note" }));
+    expect(screen.queryByRole("dialog", { name: "Kitchen note" })).toBeNull();
+    expect(within(screen.getByRole("list", { name: "New items" })).getByText("“extra crispy”")).toBeInTheDocument();
+    expect(prompt).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("radio", { name: "Takeaway" }));
+    await user.click(screen.getByRole("button", { name: "Send to kitchen" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "POST" && c.url === "/api/orders")).toBe(true));
+    const post = calls.find((c) => c.method === "POST" && c.url === "/api/orders")!;
+    expect(post.body).toMatchObject({ items: [{ menuItemId: "i-dosa", notes: "extra crispy" }] });
+  });
+
   it("requires a table for dine-in and shows server validation errors", async () => {
     const user = userEvent.setup();
     handler = posBackend({ "POST /api/orders": () => ({ status: 422, error: { code: "ValidationError", message: "Masala Dosa is sold out at this outlet" } }) });
@@ -292,6 +316,22 @@ describe("KDS", () => {
     expect(onAction).toHaveBeenCalledWith("ACCEPTED");
   });
 
+  it("voids a ticket only after confirming in an in-app dialog", async () => {
+    const user = userEvent.setup();
+    const onAction = vi.fn();
+    const confirm = vi.fn(() => true);
+    vi.stubGlobal("confirm", confirm);
+    render(<TicketCard ticket={ticket()} now={Date.now()} pending={false} canUpdate onAction={onAction} />);
+    await user.click(screen.getByRole("button", { name: "Void" }));
+    const dlg = screen.getByRole("dialog", { name: "Void KOT 42?" });
+    await user.click(within(dlg).getByRole("button", { name: "Keep ticket" }));
+    expect(onAction).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Void" }));
+    await user.click(within(screen.getByRole("dialog", { name: "Void KOT 42?" })).getByRole("button", { name: "Void KOT" }));
+    expect(onAction).toHaveBeenCalledWith("CANCELLED");
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
   it("hides actions for view-only roles", () => {
     render(<TicketCard ticket={ticket({ status: "READY" })} now={Date.now()} pending={false} canUpdate={false} onAction={() => undefined} />);
     expect(screen.queryByRole("button")).toBeNull();
@@ -347,5 +387,24 @@ describe("login", () => {
       await user.click(screen.getByRole("button", { name: "Sign in" }));
     });
     expect(router.replace).toHaveBeenCalledWith("/dashboard");
+  });
+
+  it("keeps Sign in actionable and explains empty fields without calling the API", async () => {
+    const user = userEvent.setup();
+    handler = () => ok({ user: {} });
+    render(<LoginForm />);
+    const signIn = screen.getByRole("button", { name: "Sign in" });
+    expect(signIn).toBeEnabled();
+    await user.click(signIn);
+    expect(screen.getByText("Enter your email address.")).toBeInTheDocument();
+    expect(screen.getByText("Enter your password.")).toBeInTheDocument();
+    expect(screen.getByLabelText("Email")).toHaveAttribute("aria-invalid", "true");
+    expect(calls).toHaveLength(0);
+    await user.type(screen.getByLabelText("Email"), "a@b.co");
+    expect(screen.queryByText("Enter your email address.")).toBeNull();
+    await user.type(screen.getByLabelText("Password"), "secret");
+    await user.click(screen.getByRole("button", { name: "Show" }));
+    expect(screen.getByLabelText("Password")).toHaveAttribute("type", "text");
+    expect(screen.getByRole("link", { name: "Forgot password?" })).toHaveAttribute("href", "/forgot-password");
   });
 });

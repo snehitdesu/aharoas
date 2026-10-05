@@ -12,6 +12,7 @@ import {
   getOrganization, updateOrganization, listDepartments, createDepartment, updateDepartment,
   listFloors, updateFloor, listUnitConversions, listMaterialCategories,
 } from "@/server/services/adminQueries";
+import { listIntegrations, upsertIntegration } from "@/server/services/integrations";
 
 export const runtime = "nodejs";
 
@@ -21,7 +22,7 @@ const pageQ = z.object({ take: z.coerce.number().int().positive().max(200).optio
 export const { GET, POST, PATCH } = createRouter([
   // organization
   { method: "GET", path: "organization", handler: ({ ctx }) => getOrganization(prisma, ctx) },
-  { method: "PATCH", path: "organization", handler: ({ ctx, body }) => updateOrganization(ctx, body as never) },
+  { method: "PATCH", path: "organization", reauth: "settings.manage", handler: ({ ctx, body }) => updateOrganization(ctx, body as never) },
   // departments (outlet-level)
   { method: "GET", path: "departments", handler: ({ ctx, query }) => listDepartments(prisma, ctx, outletQuery.parse(query).outletId) },
   { method: "POST", path: "departments", handler: ({ ctx, body }) => createDepartment(ctx, body as never) },
@@ -47,8 +48,11 @@ export const { GET, POST, PATCH } = createRouter([
   { method: "POST", path: "vendors/:id/materials", handler: ({ ctx, params, body }) => linkVendorMaterial(ctx, { ...(body as object), vendorId: params.id } as never) },
   // outlets
   { method: "GET", path: "outlets", handler: ({ ctx }) => listOutlets(prisma, ctx) },
-  { method: "POST", path: "outlets", handler: ({ ctx, body }) => createOutlet(ctx, body as never) },
-  { method: "PATCH", path: "outlets/:id", handler: ({ ctx, params, body }) => updateOutlet(ctx, params.id, body as never) },
+  { method: "POST", path: "outlets", reauth: "settings.manage", handler: ({ ctx, body }) => createOutlet(ctx, body as never) },
+  { method: "PATCH", path: "outlets/:id", reauth: "settings.manage", handler: ({ ctx, params, body }) => updateOutlet(ctx, params.id, body as never) },
+  // integration connections (webhook tenant binding; secrets are write-only)
+  { method: "GET", path: "integrations", handler: ({ ctx }) => listIntegrations(prisma, ctx) },
+  { method: "POST", path: "integrations", reauth: "settings.manage", handler: ({ ctx, body }) => upsertIntegration(ctx, body as never) },
   // floors + tables
   { method: "GET", path: "floors", handler: ({ ctx, query }) => listFloors(prisma, ctx, outletQuery.parse(query).outletId) },
   { method: "PATCH", path: "floors/:id", handler: ({ ctx, params, body }) => updateFloor(ctx, params.id, body as never) },

@@ -1,96 +1,118 @@
 import type { Config } from "tailwindcss";
 
 /**
- * Aharos design tokens.
+ * RESTORA design tokens — "The Operating System for Restaurants".
  *
- * Brand identity: Moonstone (#4C9DB0) + Vanilla (#FFEBAF) over a mature, slightly
- * cool neutral base so the two brand colors read as intentional accents, never
- * wallpaper. Scales are consumed by the component primitives (Button, Badge,
- * Card, DataTable, …) so a single change here re-themes the whole application.
+ * Direction: retro-modern editorial. A warm ivory / beige paper foundation,
+ * espresso-brown ink, terracotta as the single action colour, saffron for
+ * highlights, and muted, earthy semantics (sage, ochre, brick, teal) so status
+ * colours stay legible on paper without shouting. Every scale is consumed by
+ * the component primitives (Button, Badge, Card, DataTable, …): one change here
+ * re-themes the whole application. Contrast (WCAG 2.1) was checked for every
+ * text/background pair the primitives use — body and muted text ≥ 4.5:1 on
+ * page and paper, ink-400 (icons / placeholders / disabled only) ≥ 3:1.
  *
- * - `brand`  — Moonstone. Active state, links, focus ring, primary actions.
- *              500 is the pure identity colour; 600/700 are the deeper,
- *              AA-contrast shades used behind white button text.
- * - `vanilla`/`accent` — warm highlight. KPI emphasis, selected rows, premium
- *              moments. Always paired with dark ink text, never used for text.
- * - `ink`    — neutral text/surface/border ramp.
- * - `ok/warn/bad/info` — semantic. `warn` is pushed toward amber so it never
- *              collides with Vanilla.
+ * Scale names are kept from the first identity (brand / vanilla / accent / ink
+ * / ok / warn / bad / info) so no screen needs to change its class names.
+ *
+ * - `brand`   — terracotta. Primary actions, active navigation, links, focus.
+ *               600 sits behind white text (5.4:1); 700 is the link / text shade.
+ * - `vanilla` / `accent` — saffron highlight (pair with dark ink text only).
+ * - `ink`     — espresso neutral ramp: 50 = page, 900 = headline ink.
+ * - `paper`   — card / surface ivory (lighter than the page).
+ * - `espresso`— the dark chrome (side navigation, operator bar, toasts).
+ * - `ok / warn / bad / info` — sage / ochre / brick / teal.
  */
 const config: Config = {
   content: ["./src/**/*.{ts,tsx}"],
   theme: {
     extend: {
       colors: {
-        // Moonstone — core brand / interactive identity.
+        // Terracotta — the action colour.
         brand: {
-          50: "#eff6f8",
-          100: "#d7eaef",
-          200: "#b2d6de",
-          300: "#85bfcb",
-          400: "#63aabc",
-          500: "#4c9db0", // pure Moonstone — tints, focus ring, accents
-          600: "#357d90", // primary button bg (AA on white text)
-          700: "#2b6475", // hover / active
-          800: "#27525f",
-          900: "#234650",
+          50: "#fbefe8",
+          100: "#f6dccd",
+          200: "#ecbaa1",
+          300: "#e09474",
+          400: "#d47552",
+          500: "#c85a35", // identity terracotta — accents, focus ring, active marks
+          600: "#b04a29", // primary button (white text 5.4:1)
+          700: "#923b1f", // hover / links / text on tints (7.2:1 on paper)
+          800: "#76301b",
+          900: "#5c2817",
         },
-        // Vanilla — warm highlight accent (pair with ink text only).
+        // Saffron — warm highlight (with ink text only).
         vanilla: {
-          50: "#fffdf5",
-          100: "#fff8e3",
-          200: "#ffebaf", // pure Vanilla
-          300: "#fbd97a",
-          400: "#f2c44d",
-          500: "#e3a92b",
-          600: "#bd8416",
-          700: "#946709",
+          50: "#fefaf0",
+          100: "#fbefd2",
+          200: "#f6dfa3",
+          300: "#efca6e",
+          400: "#e4b048",
+          500: "#cf942b",
+          600: "#a9741a",
+          700: "#86580f",
         },
         accent: {
-          50: "#fffdf5",
-          100: "#fff8e3",
-          200: "#ffebaf",
-          300: "#fbd97a",
-          400: "#f2c44d",
-          500: "#e3a92b",
-          600: "#bd8416",
-          700: "#946709",
+          50: "#fefaf0",
+          100: "#fbefd2",
+          200: "#f6dfa3",
+          300: "#efca6e",
+          400: "#e4b048",
+          500: "#cf942b",
+          600: "#a9741a",
+          700: "#86580f",
         },
-        // Neutral ramp — text, surfaces, borders.
+        // Espresso neutral ramp — text, rules, surfaces.
         ink: {
-          50: "#f7f9fa",
-          100: "#eef1f3",
-          200: "#e2e7ea",
-          300: "#cfd6db",
-          400: "#9aa4ac",
-          500: "#6b7681",
-          600: "#515b64",
-          700: "#3c454c",
-          800: "#283036",
-          900: "#141a1f",
+          50: "#f6f0e4", // page (warm ivory-beige)
+          100: "#efe6d6", // sunken / hover
+          200: "#e6dac6", // hairlines
+          300: "#d4c4ac", // borders
+          400: "#8c7964", // icons, placeholders, disabled (≥ 3:1)
+          500: "#76634f", // muted text (≥ 5:1)
+          600: "#5f4d3d",
+          700: "#4a3a2c",
+          800: "#352619",
+          900: "#24180f", // headline ink
         },
-        // Semantic.
-        ok: { 50: "#e9f6ef", 100: "#cdebdb", 500: "#15935e", 600: "#0f7a4d", 700: "#0c5f3d" },
-        warn: { 50: "#fdf2df", 100: "#f9e2b8", 500: "#b8730c", 600: "#9a5f09", 700: "#7a4b08" },
-        bad: { 50: "#fbe9e7", 100: "#f6cfca", 500: "#d1443e", 600: "#b5342f", 700: "#8f2824" },
-        info: { 50: "#eff6f8", 100: "#d7eaef", 500: "#357d90", 600: "#2b6475", 700: "#234650" },
+        paper: {
+          DEFAULT: "#fffcf6",
+          warm: "#fbf6ec",
+        },
+        espresso: {
+          DEFAULT: "#24180f",
+          800: "#2e2016",
+          700: "#3b2a1d",
+          600: "#4d3828",
+        },
+        // Semantic — earthy, legible on paper.
+        ok: { 50: "#eef3e8", 100: "#d5e3c8", 500: "#4c7a3b", 600: "#3d6a2f", 700: "#30552a" },
+        warn: { 50: "#fcf1dd", 100: "#f6dfb2", 500: "#b4741a", 600: "#965c10", 700: "#7a4a0c" },
+        bad: { 50: "#fbe9e5", 100: "#f3c9c0", 500: "#c0392b", 600: "#a52a1f", 700: "#86221a" },
+        info: { 50: "#e9f2f1", 100: "#cbe0de", 500: "#327574", 600: "#2b6463", 700: "#22504f" },
       },
       fontFamily: {
         sans: ["var(--font-inter)", "Inter", "ui-sans-serif", "system-ui", "-apple-system", "Segoe UI", "Roboto", "Arial", "sans-serif"],
+        display: ["var(--font-display)", "Georgia", "Cambria", "Times New Roman", "serif"],
         mono: ["ui-monospace", "SFMono-Regular", "Menlo", "monospace"],
       },
       borderRadius: {
-        md: "0.5rem",
-        lg: "0.625rem",
-        xl: "0.875rem",
-        "2xl": "1.125rem",
+        md: "0.375rem",
+        lg: "0.5rem",
+        xl: "0.75rem",
+        "2xl": "1rem",
       },
       boxShadow: {
-        xs: "0 1px 2px 0 rgb(20 26 31 / 0.05)",
-        card: "0 1px 2px 0 rgb(20 26 31 / 0.04), 0 1px 3px 0 rgb(20 26 31 / 0.06)",
-        raised: "0 2px 6px -2px rgb(20 26 31 / 0.10), 0 6px 16px -6px rgb(20 26 31 / 0.10)",
-        pop: "0 10px 30px -8px rgb(20 26 31 / 0.18), 0 2px 8px -4px rgb(20 26 31 / 0.10)",
-        focus: "0 0 0 3px rgb(76 157 176 / 0.35)",
+        xs: "0 1px 0 0 rgb(36 24 15 / 0.06)",
+        card: "0 1px 0 0 rgb(36 24 15 / 0.05), 0 1px 3px 0 rgb(36 24 15 / 0.06)",
+        raised: "0 2px 0 0 rgb(36 24 15 / 0.05), 0 8px 20px -10px rgb(36 24 15 / 0.22)",
+        pop: "0 14px 34px -10px rgb(36 24 15 / 0.30), 0 2px 8px -4px rgb(36 24 15 / 0.14)",
+        // Retro "printed" offset shadow for emphasis surfaces (hero KPI, dialogs).
+        print: "3px 3px 0 0 rgb(36 24 15 / 0.9)",
+        focus: "0 0 0 3px rgb(200 90 53 / 0.35)",
+      },
+      letterSpacing: {
+        eyebrow: "0.14em",
       },
       keyframes: {
         "fade-in": { from: { opacity: "0" }, to: { opacity: "1" } },

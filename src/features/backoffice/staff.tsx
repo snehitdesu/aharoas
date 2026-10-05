@@ -25,7 +25,7 @@ import { ActionButton } from "@/components/ui/Confirm";
 
 type Membership = { id: string; role: string; outletId: string | null };
 export type StaffRow = { id: string; email: string; name: string; phone: string | null; active: boolean; lastLoginAt: string | null; memberships: Membership[] };
-type RoleMatrix = { permissions: string[]; roles: Array<{ role: string; rank: number; permissions: string[]; grantable: boolean }> };
+export type RoleMatrix = { permissions: string[]; roles: Array<{ role: string; rank: number; permissions: string[]; grantable: boolean }> };
 type AttendanceRow = { id: string; outletId: string; userId: string; userName: string; checkIn: string; checkOut: string | null; status: string; note: string | null };
 type LeaveRow = { id: string; outletId: string; userId: string; userName: string; fromDate: string; toDate: string; reason: string | null; status: string; approvedByName: string | null; createdAt: string };
 type Task = { id: string; outletId: string; title: string; description: string | null; assignedToId: string | null; priority: string; status: TaskStatusT; dueAt: string | null; completedById: string | null; createdAt: string };
@@ -63,10 +63,10 @@ function ScopeSelect({ value, onChange }: { value: string; onChange: (v: string)
   );
 }
 
-type PasswordLink = { email: string; token: string; purpose: "SETUP" | "RESET"; expiresAt: string };
+export type PasswordLink = { email: string; token: string; purpose: "SETUP" | "RESET"; expiresAt: string };
 
 /** Shows a one-time setup/reset link exactly once; the server never returns it again. */
-function PasswordLinkDialog({ link, onClose }: { link: PasswordLink; onClose: () => void }) {
+export function PasswordLinkDialog({ link, onClose }: { link: PasswordLink; onClose: () => void }) {
   const url = `${window.location.origin}/set-password#token=${link.token}`;
   const [copied, setCopied] = useState(false);
   const copy = async () => {
@@ -87,7 +87,7 @@ function PasswordLinkDialog({ link, onClose }: { link: PasswordLink; onClose: ()
   );
 }
 
-function NewStaffDialog({ open, onClose, onDone, roles }: { open: boolean; onClose: () => void; onDone: (link: PasswordLink) => void; roles: RoleMatrix["roles"] }) {
+export function NewStaffDialog({ open, onClose, onDone, roles }: { open: boolean; onClose: () => void; onDone: (link: PasswordLink) => void; roles: RoleMatrix["roles"] }) {
   const outletId = useOutletId();
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -109,7 +109,7 @@ function NewStaffDialog({ open, onClose, onDone, roles }: { open: boolean; onClo
   );
 }
 
-function AccessDialog({ user, roles, onClose, onChanged }: { user: StaffRow; roles: RoleMatrix["roles"]; onClose: () => void; onChanged: () => void }) {
+export function AccessDialog({ user, roles, onClose, onChanged }: { user: StaffRow; roles: RoleMatrix["roles"]; onClose: () => void; onChanged: () => void }) {
   const outletId = useOutletId();
   const outletLabel = useOutletLabel();
   const [role, setRole] = useState("");

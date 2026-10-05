@@ -156,7 +156,9 @@ describe("cash drawer and daily closing", () => {
     const closed = await closeCashDrawer(ctx, session.id, 2700);
     expect(closed).toMatchObject({ expectedCash: 2700, variance: 0 });
     expect(await prisma.anomaly.count({ where: { entityType: "CashDrawerSession", entityId: session.id } })).toBe(0);
-    await expect(closeCashDrawer(ctx, session.id, 2700)).rejects.toBeInstanceOf(ValidationError);
+    // A retried close with the same count returns the original result; another count is refused.
+    expect(await closeCashDrawer(ctx, session.id, 2700)).toMatchObject({ expectedCash: 2700, variance: 0 });
+    await expect(closeCashDrawer(ctx, session.id, 2600)).rejects.toBeInstanceOf(ValidationError);
   });
 
   it("daily closing lists blockers until the day is settled and reconciled", async () => {

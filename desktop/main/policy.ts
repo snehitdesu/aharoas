@@ -30,6 +30,14 @@ export function appOrigin(port: number): string {
   return `http://localhost:${port}`;
 }
 
+/**
+ * Command-line switches that attach a debugger to the app (Chromium DevTools
+ * protocol or Node inspector). A packaged build refuses to start with any of them.
+ */
+export function hasDebugSwitch(argv: readonly string[]): boolean {
+  return argv.some((a) => /^--(remote-debugging-(port|pipe|address)|inspect(-brk|-port|-publish-uid)?|js-flags)(=|$)/i.test(a));
+}
+
 // ---------------- IPC input validation ----------------
 
 export type FieldErrors = Record<string, string[]>;
@@ -92,8 +100,11 @@ export function validatePrinterName(raw: unknown): string | null {
 
 // ---------------- child process environment ----------------
 
-/** OS variables the Node child processes legitimately need on Windows. Nothing else is inherited. */
-const INHERITED_ENV = ["SystemRoot", "SYSTEMROOT", "windir", "TEMP", "TMP", "PATH", "Path", "PATHEXT", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "ProgramData", "COMPUTERNAME", "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE", "OS", "HOME", "LANG", "TZ"];
+/** OS variables the Node child processes legitimately need (Windows, then macOS/POSIX). Nothing else is inherited. */
+const INHERITED_ENV = [
+  "SystemRoot", "SYSTEMROOT", "windir", "TEMP", "TMP", "PATH", "Path", "PATHEXT", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "ProgramData", "COMPUTERNAME", "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE", "OS",
+  "HOME", "TMPDIR", "USER", "LOGNAME", "LANG", "LC_ALL", "LC_CTYPE", "TZ",
+];
 
 /**
  * Build a child environment from an allow-list, so a developer's or the user's
@@ -106,4 +117,32 @@ export function childEnv(parent: NodeJS.ProcessEnv, extra: Record<string, string
     if (typeof v === "string") env[k] = v;
   }
   return { ...env, ...extra };
+}
+
+// ---------------- step-up re-authentication (backup restore) ----------------
+
+export type ReauthOutcome = "granted" | "cancelled" | "session_ended";
+
+/**
+ * The renderer's answer to a main-process re-auth request. Only a well-formed
+ * reply to the CURRENT request id counts; anything else is "cancelled". Even a
+ * "granted" reply is only a hint to retry — the server decides.
+ */
+export function parseReauthReply(raw: unknown, expectedId: string): ReauthOutcome | null {
+  if (!raw || typeof raw !== "object") return null;
+  const { id, outcome } = raw as { id?: unknown; outcome?: unknown };
+  if (id !== expectedId) return null;
+  return outcome === "granted" || outcome === "session_ended" ? outcome : "cancelled";
+}
+
+export type RestoreAuthorization = "authorized" | "reauth_required" | "session_ended" | "forbidden" | "error";
+
+/** Map the server's answer to POST /api/system/restore-authorization. */
+export function restoreAuthorizationFrom(status: number, body: unknown): RestoreAuthorization {
+  const b = body as { ok?: boolean; data?: { authorized?: unknown }; error?: { code?: unknown } } | null;
+  if (status === 200 && b?.ok === true && b.data?.authorized === true) return "authorized";
+  if (status === 401) return "session_ended";
+  if (status === 403 && b?.error?.code === "ReauthRequiredError") return "reauth_required";
+  if (status === 403) return "forbidden";
+  return "error";
 }

@@ -13,7 +13,9 @@ import { ModifierDialog } from "@/features/pos/components/ModifierDialog";
 import { TablePicker } from "@/features/pos/components/TablePicker";
 import { CustomerPicker } from "@/features/pos/components/CustomerPicker";
 import { PaymentDialog } from "@/features/pos/components/PaymentDialog";
-import { OpenOrdersDialog } from "@/features/pos/components/OpenOrdersDialog";
+import { OpenOrdersDialog, isIncomingQr, type OpenOrder } from "@/features/pos/components/OpenOrdersDialog";
+import { createPoller } from "@/lib/polling";
+import { BACKGROUND_HEADER } from "@/constants/auth";
 import { Button } from "@/components/ui/Button";
 import { Dialog } from "@/components/ui/Dialog";
 import { LoadingState, ErrorState } from "@/components/ui/States";
@@ -39,6 +41,18 @@ export function PosScreen({ outletId, perms }: { outletId: string; perms: PosPer
   const [discount, setDiscount] = useState("");
   const guard = useRef(createSubmitGuard());
   const searchRef = useRef<HTMLInputElement>(null);
+  const [incoming, setIncoming] = useState(0);
+
+  // Guests' QR orders arrive without anyone at the till: poll for ones awaiting acceptance.
+  useEffect(() => {
+    const p = createPoller<{ items: OpenOrder[] }>({
+      intervalMs: 10_000,
+      fetch: (signal) => api<{ items: OpenOrder[] }>("/api/orders", { query: { outletId, active: "true", take: 100 }, signal, headers: { [BACKGROUND_HEADER]: "1" } }),
+      onData: (d) => setIncoming(d.items.filter(isIncomingQr).length),
+    });
+    p.start();
+    return () => p.stop();
+  }, [outletId]);
 
   const loadTables = useCallback(async () => {
     try {
@@ -166,23 +180,29 @@ export function PosScreen({ outletId, perms }: { outletId: string; perms: PosPer
   async function addToRunning(thenPay: boolean, action: Action) {
     if (!running) return;
     if (cart.lines.length === 0) {
+      // Nothing new to add. An order still OPEN (saved here, or a guest's QR order
+      // awaiting acceptance) goes to the kitchen first: once PAID it can no longer
+      // be fired, and the food would never be made.
+      if (running.status === "OPEN") {
+        setBusy(action);
+        const result = await guard.current.run(`accept:${running.id}`, () => api(`/api/orders/${running.id}/submit`, { method: "POST", body: {} }));
+        setBusy(null);
+        await refreshRunning(running.id).catch(() => undefined);
+        if (result.status === "busy") return;
+        if (result.status === "error") return failure(result.error);
+        toast.show(`Order #${running.id.slice(-6).toUpperCase()} accepted and sent to kitchen`, "ok");
+        void loadTables();
+      }
       if (thenPay) setPayingOrderId(running.id);
       return;
     }
     setBusy(action);
-    const result = await guard.current.run(cartFingerprint(cart, `round:${running.id}`), async () => {
-      const added: string[] = [];
-      try {
-        for (const l of cart.lines) {
-          await api(`/api/orders/${running.id}/items`, { method: "POST", body: { menuItemId: l.menuItemId, variantId: l.variantId, modifierOptionIds: l.modifierOptionIds.length ? l.modifierOptionIds : undefined, qty: l.qty, notes: l.notes } });
-          added.push(l.key);
-        }
-        await api(`/api/orders/${running.id}/${running.status === "OPEN" ? "submit" : "fire"}`, { method: "POST", body: {} });
-        return added;
-      } finally {
-        for (const key of added) dispatch({ type: "remove", key }); // only lines the server confirmed leave the cart
-      }
-    });
+    // One atomic, keyed round (lines + kitchen ticket): a retry after a lost response
+    // replays the original round instead of adding the lines a second time.
+    const result = await guard.current.run(cartFingerprint(cart, `round:${running.id}`), (key) =>
+      api(`/api/orders/${running.id}/rounds`, { method: "POST", idempotencyKey: key, body: { items: toOrderItems(cart), fire: true } })
+    );
+    if (result.status === "ok") for (const l of cart.lines) dispatch({ type: "remove", key: l.key }); // the round was confirmed
     setBusy(null);
     await refreshRunning(running.id).catch(() => undefined);
     if (result.status === "busy") return;
@@ -249,7 +269,10 @@ export function PosScreen({ outletId, perms }: { outletId: string; perms: PosPer
           canUseCustomers={perms.customerView}
         />
         <div className="grid grid-cols-3 gap-2 border-t border-ink-200 bg-ink-50 p-2" role="toolbar" aria-label="Order actions">
-          <Button size="lg" onClick={() => setDialog("orders")}>Open orders</Button>
+          <Button size="lg" onClick={() => setDialog("orders")} aria-label={incoming ? `Open orders, ${incoming} new QR ${incoming === 1 ? "order" : "orders"}` : "Open orders"}>
+            Open orders
+            {incoming > 0 && <span aria-hidden className="ml-1.5 rounded-full bg-warn-500 px-2 text-xs font-bold text-white tabular-nums">{incoming}</span>}
+          </Button>
           <Button size="lg" onClick={() => (running ? (setRunning(null), dispatch({ type: "clear" })) : dispatch({ type: "clear" }))} disabled={!hasLines && !running}>
             {running ? "Close" : "Clear"}
           </Button>
@@ -260,12 +283,10 @@ export function PosScreen({ outletId, perms }: { outletId: string; perms: PosPer
               Save
             </Button>
           )}
-          {running && perms.discount ? (
-            <Button size="lg" onClick={() => { setDiscount(String(toNumber(running.discount) || "")); setDialog("discount"); }}>Discount</Button>
-          ) : (
-            <span />
+          {running && perms.discount && (
+            <Button size="xl" onClick={() => { setDiscount(String(toNumber(running.discount) || "")); setDialog("discount"); }}>Discount</Button>
           )}
-          <Button size="xl" variant="primary" className={running && perms.discount ? "" : "col-span-2"} onClick={() => void send()} loading={busy === "send"} disabled={!hasLines || busy !== null}>
+          <Button size="xl" variant="primary" className={running && perms.discount ? "col-span-2" : "col-span-3"} onClick={() => void send()} loading={busy === "send"} disabled={(!hasLines && running?.status !== "OPEN") || busy !== null}>
             Send to kitchen
           </Button>
           {perms.pay && (

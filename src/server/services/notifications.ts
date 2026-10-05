@@ -1,24 +1,51 @@
 /**
  * Notification domain. In-app notifications persist in the DB; other channels
  * dispatch through a provider abstraction (no external creds hardcoded; the
- * mock provider is used in development).
+ * mock provider is used in development). Phase 6 presents them in the in-app
+ * alert centre (polled — there is no push/realtime channel).
  *
- * Visibility: a user sees notifications addressed to them, plus broadcasts
- * (userId = null) for the organization or for outlets they can access.
+ * Visibility:
+ *  - a notification addressed to a user (userId) is visible to that user only;
+ *  - a broadcast (userId = null) for an outlet is visible to members of that
+ *    outlet whose role there holds the type's permission (NOTIFICATION_PERMISSION:
+ *    a vendor-due alert is for finance, not for the kitchen); an org-level
+ *    broadcast (outletId = null) needs the permission anywhere.
  *
- * Schema limitation: `readAt` is a single column, so a broadcast has one shared
- * read state (marking it read marks it read for every recipient). Per-user read
- * receipts for broadcasts need a NotificationRead table.
+ * Read state: a personal notification uses Notification.readAt; a broadcast is
+ * read per user (NotificationRead), so one cashier reading "Bill requested"
+ * does not hide it from the others.
  */
-import type { PrismaClient } from "@prisma/client";
+import type { Prisma, PrismaClient } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "@/server/db/client";
 import { type AccessContext, NotFoundError, ValidationError, ForbiddenError } from "@/server/db/scope";
+import { can, type Permission } from "@/server/auth/rbac";
 import { type Client, type Tx, runInTx } from "@/server/services/_workflow";
 import { lowStock } from "@/server/services/inventory";
 import { getNotificationProvider, type NotificationChannel, type SendResult } from "@/integrations/notification";
 
-export const NotificationType = ["LOW_STOCK", "PURCHASE_APPROVAL", "VENDOR_DUE", "RESERVATION", "ORDER_READY", "ANOMALY", "TASK", "LEAVE", "SYSTEM"] as const;
+export const NotificationType = [
+  "LOW_STOCK", "PURCHASE_APPROVAL", "VENDOR_DUE", "RESERVATION", "ORDER_READY", "ANOMALY", "TASK", "LEAVE", "SYSTEM",
+  // Phase 6 operational events
+  "NEW_ORDER", "BILL_REQUESTED", "PAYMENT_FAILED",
+] as const;
+export type NotificationTypeT = (typeof NotificationType)[number];
+
+/** Who may see a BROADCAST of each type (null = every member of the outlet / organization). */
+export const NOTIFICATION_PERMISSION: Record<NotificationTypeT, Permission | null> = {
+  LOW_STOCK: "inventory.view",
+  PURCHASE_APPROVAL: "purchase.approve",
+  VENDOR_DUE: "finance.view",
+  RESERVATION: "reservation.manage",
+  ORDER_READY: "order.view",
+  NEW_ORDER: "order.view",
+  BILL_REQUESTED: "payment.take",
+  PAYMENT_FAILED: "payment.take",
+  ANOMALY: "anomaly.view",
+  TASK: null,
+  LEAVE: null,
+  SYSTEM: null,
+};
 
 const createSchema = z.object({
   outletId: z.string().optional(),
@@ -81,46 +108,89 @@ export function createNotification(ctx: AccessContext, input: CreateNotification
   return runInTx(db, (tx) => createNotificationTx(tx, ctx, input));
 }
 
-/** where-clause: notifications visible to the actor. */
-function visibleTo(ctx: AccessContext) {
+/** Broadcast types the actor may see at an outlet (or org-level when outletId is undefined). */
+function typesAllowed(ctx: AccessContext, outletId?: string): string[] {
+  return NotificationType.filter((t) => {
+    const perm = NOTIFICATION_PERMISSION[t];
+    return perm === null || can(ctx, perm, outletId);
+  });
+}
+
+/** where-clause: notifications visible to the actor. Outlets with the same allowed types share one clause. */
+function visibleTo(ctx: AccessContext): Prisma.NotificationWhereInput {
+  const byTypes = new Map<string, { types: string[]; outlets: string[] }>();
+  for (const o of ctx.outletIds) {
+    const types = typesAllowed(ctx, o);
+    if (!types.length) continue;
+    const k = types.join(",");
+    (byTypes.get(k) ?? byTypes.set(k, { types, outlets: [] }).get(k)!).outlets.push(o);
+  }
   return {
     organizationId: ctx.organizationId,
     OR: [
       { userId: ctx.userId },
-      { userId: null, outletId: null },
-      { userId: null, outletId: { in: ctx.outletIds } },
+      { userId: null, outletId: null, type: { in: typesAllowed(ctx) } },
+      ...[...byTypes.values()].map((g) => ({ userId: null, outletId: { in: g.outlets }, type: { in: g.types } })),
     ],
   };
 }
 
-export function listNotifications(db: PrismaClient, ctx: AccessContext, opts: { onlyUnread?: boolean; outletId?: string; take?: number; cursor?: string } = {}) {
-  return db.notification.findMany({
-    where: { AND: [visibleTo(ctx), opts.onlyUnread ? { readAt: null } : {}, opts.outletId ? { outletId: opts.outletId } : {}] },
+function isVisible(ctx: AccessContext, n: { userId: string | null; outletId: string | null; type: string }) {
+  if (n.userId) return n.userId === ctx.userId;
+  if (n.outletId && !ctx.outletIds.includes(n.outletId)) return false;
+  const perm = NOTIFICATION_PERMISSION[n.type as NotificationTypeT];
+  return perm === undefined ? false : perm === null || can(ctx, perm, n.outletId ?? undefined);
+}
+
+/** Unread for the actor: personal ones without readAt, broadcasts without the actor's read receipt. */
+function unreadFor(ctx: AccessContext): Prisma.NotificationWhereInput {
+  return { OR: [{ userId: ctx.userId, readAt: null }, { userId: null, reads: { none: { userId: ctx.userId } } }] };
+}
+
+export async function listNotifications(db: PrismaClient, ctx: AccessContext, opts: { onlyUnread?: boolean; outletId?: string; take?: number; cursor?: string } = {}) {
+  const rows = await db.notification.findMany({
+    where: { AND: [visibleTo(ctx), opts.onlyUnread ? unreadFor(ctx) : {}, opts.outletId ? { outletId: opts.outletId } : {}] },
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     take: Math.min(opts.take ?? 50, 200),
     ...(opts.cursor ? { cursor: { id: opts.cursor }, skip: 1 } : {}),
+    include: { reads: { where: { userId: ctx.userId }, select: { readAt: true } } },
   });
+  // readAt is the actor's own read time (broadcasts: their receipt).
+  return rows.map(({ reads, ...n }) => ({ ...n, readAt: n.userId ? n.readAt : reads[0]?.readAt ?? null }));
 }
 
 export async function unreadCount(db: PrismaClient, ctx: AccessContext): Promise<number> {
-  return db.notification.count({ where: { AND: [visibleTo(ctx), { readAt: null }] } });
+  return db.notification.count({ where: { AND: [visibleTo(ctx), unreadFor(ctx)] } });
 }
+
+const isUniqueViolation = (e: unknown) => (e as { code?: string })?.code === "P2002";
 
 export function markNotificationRead(ctx: AccessContext, notificationId: string, db: Client = prisma) {
   return runInTx(db, async (tx) => {
     const n = await tx.notification.findUnique({ where: { id: notificationId } });
     if (!n || n.organizationId !== ctx.organizationId) throw new NotFoundError("Notification not found");
-    const visible = n.userId === ctx.userId || (n.userId === null && (n.outletId === null || ctx.outletIds.includes(n.outletId)));
-    if (!visible) throw new ForbiddenError("Not a recipient of this notification");
-    if (n.readAt) return n; // idempotent
-    return tx.notification.update({ where: { id: notificationId }, data: { readAt: new Date() } });
+    if (!isVisible(ctx, n)) throw new ForbiddenError("Not a recipient of this notification");
+    if (n.userId) {
+      if (n.readAt) return n; // idempotent
+      return tx.notification.update({ where: { id: notificationId }, data: { readAt: new Date() } });
+    }
+    const mine = await tx.notificationRead.findUnique({ where: { notificationId_userId: { notificationId, userId: ctx.userId } } });
+    const read = mine ?? (await tx.notificationRead.create({ data: { organizationId: ctx.organizationId, notificationId, userId: ctx.userId } }).catch(async (e) => {
+      if (isUniqueViolation(e)) return tx.notificationRead.findUniqueOrThrow({ where: { notificationId_userId: { notificationId, userId: ctx.userId } } });
+      throw e;
+    }));
+    return { ...n, readAt: read.readAt };
   });
 }
 
-/** Mark all of the actor's PERSONAL unread notifications read (broadcasts are shared; see header). */
+/** Mark everything the actor can see as read (their personal ones + their receipts for broadcasts). */
 export async function markAllRead(ctx: AccessContext, db: Client = prisma): Promise<number> {
-  const res = await db.notification.updateMany({ where: { organizationId: ctx.organizationId, userId: ctx.userId, readAt: null }, data: { readAt: new Date() } });
-  return res.count;
+  return runInTx(db, async (tx) => {
+    const personal = await tx.notification.updateMany({ where: { organizationId: ctx.organizationId, userId: ctx.userId, readAt: null }, data: { readAt: new Date() } });
+    const broadcasts = await tx.notification.findMany({ where: { AND: [visibleTo(ctx), { userId: null, reads: { none: { userId: ctx.userId } } }] }, select: { id: true }, take: 1000 });
+    for (const b of broadcasts) await tx.notificationRead.create({ data: { organizationId: ctx.organizationId, notificationId: b.id, userId: ctx.userId } });
+    return personal.count + broadcasts.length;
+  });
 }
 
 // ---------------- Trigger helpers (operational events) ----------------

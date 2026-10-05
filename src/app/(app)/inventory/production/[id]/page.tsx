@@ -2,7 +2,7 @@ import { gated } from "@/lib/auth/gate";
 import { ProductionDetail } from "@/features/backoffice/inventory";
 
 export const dynamic = "force-dynamic";
-export const metadata = { title: "Production batch — Aharos" };
+export const metadata = { title: "Production batch — RESTORA" };
 
 export default async function Page({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;

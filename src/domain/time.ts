@@ -81,7 +81,11 @@ function nextDate(date: string): string {
  */
 export function toBusinessDate(input: Date | string, tz: string): string {
   if (typeof input === "string") {
-    if (DATE_RE.test(input)) return input;
+    if (DATE_RE.test(input)) {
+      // Reject impossible calendar dates ("2026-02-30", "2026-13-45") instead of rolling them over.
+      if (new Date(`${input}T00:00:00Z`).toISOString().slice(0, 10) !== input) throw new RangeError(`Invalid business date "${input}"`);
+      return input;
+    }
     const d = new Date(input);
     if (Number.isNaN(d.getTime())) throw new RangeError(`Invalid business date "${input}"`);
     return localDate(d, tz);

@@ -15,7 +15,8 @@
 import { PrismaClient } from "@prisma/client";
 import { ZodError } from "zod";
 import { bootstrapOwner, ALREADY_INITIALIZED } from "@/server/services/bootstrap";
-import { applyMigrations, inspectMigrations, loadMigrations, MigrationRefusedError } from "./migrator";
+import { inspectMigrations, loadMigrations, MigrationRefusedError } from "./migrator";
+import { upgradeDatabase } from "./upgrade";
 import { createVerifiedBackup, rotateAutoBackups, sqliteUrl, verifyBackupFile, BACKUP_REASONS, type BackupReason, type ClientFactory } from "./backup";
 
 export const AUTO_BACKUPS_KEPT = 14;
@@ -57,20 +58,8 @@ async function handle(req: Request): Promise<unknown> {
       const journal = await db().$queryRawUnsafe<{ journal_mode: string }[]>("PRAGMA journal_mode");
       return { ...status, initialized: status.state === "managed" && !status.problems.length ? await isInitialized() : false, journalMode: journal[0]?.journal_mode };
     }
-    case "migrate": {
-      const backupDir = str(req.args, "backupDir");
-      const migrations = loadMigrations(MIGRATIONS_DIR);
-      const before = await inspectMigrations(db(), migrations);
-      if (before.problems.length) throw new MigrationRefusedError(before.problems);
-      let backup = null;
-      if (before.pending.length && before.state === "managed") {
-        backup = await createVerifiedBackup({ db: db(), open, backupDir, reason: "pre-migration", appVersion: APP_VERSION });
-      }
-      // WAL: readers never block the writer; persists in the file header.
-      await db().$queryRawUnsafe("PRAGMA journal_mode = WAL");
-      const result = await applyMigrations(db(), migrations);
-      return { applied: result.applied, pending: result.status.pending, backup };
-    }
+    case "migrate":
+      return upgradeDatabase({ db: db(), open, migrations: loadMigrations(MIGRATIONS_DIR), backupDir: str(req.args, "backupDir"), appVersion: APP_VERSION });
     case "bootstrap": {
       const input = req.args?.input;
       if (!input || typeof input !== "object") throw new Error("Invalid argument: input");

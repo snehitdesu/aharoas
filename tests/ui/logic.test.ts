@@ -86,6 +86,8 @@ describe("cart", () => {
     const dine = cartContextFromOrder({ channel: "DINE_IN", tableId: "t1", covers: 2, customer: null });
     expect(dine.tableId).toBe("t1");
     expect(cartContextFromOrder({ channel: "TAKEAWAY", tableId: null, customer: null }).customer).toBeNull();
+    expect(cartContextFromOrder({ channel: "QR", tableId: "t9", customer: null })).toMatchObject({ orderType: "DINE_IN", tableId: "t9" });
+    expect(cartContextFromOrder({ channel: "AGGREGATOR", tableId: null, customer: null }).orderType).toBe("TAKEAWAY");
   });
 });
 
@@ -203,6 +205,8 @@ describe("KDS lifecycle", () => {
     expect(urgency("2026-01-01T10:00:00Z", t0 + 25 * 60000)).toBe("late");
     expect(ticketLabel(ticket({}))).toBe("Table T6");
     expect(ticketLabel(ticket({ order: { ...ticket({}).order!, channel: "TAKEAWAY", table: null } }))).toBe("Takeaway");
+    expect(ticketLabel(ticket({ order: { ...ticket({}).order!, channel: "QR" } }))).toBe("Table T6 · QR");
+    expect(ticketLabel(ticket({ order: { ...ticket({}).order!, channel: "QR", table: null } }))).toBe("QR order");
   });
 });
 

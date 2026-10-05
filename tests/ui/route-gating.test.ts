@@ -39,8 +39,8 @@ describe("route gating", () => {
   });
 
   it("every visible nav entry has a page", () => {
-    // POS and KDS are full-screen surfaces outside the (app) shell group.
-    const standalone = ["pos", "kitchen"].filter((d) => fs.existsSync(path.join(process.cwd(), "src", "app", d, "page.tsx"))).map((d) => `/${d}`);
+    // POS, KDS and the Phase 6 phone apps are full-screen surfaces outside the (app) shell group.
+    const standalone = ["pos", "kitchen", "captain", "manager"].filter((d) => fs.existsSync(path.join(process.cwd(), "src", "app", d, "page.tsx"))).map((d) => `/${d}`);
     const routes = new Set([...all.map((p) => p.route), ...standalone]);
     for (const item of NAV_ITEMS.filter((n) => !n.planned)) expect(routes.has(item.href), item.href).toBe(true);
   });

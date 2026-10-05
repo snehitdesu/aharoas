@@ -14,6 +14,7 @@
  */
 import type { PrismaClient } from "@prisma/client";
 import { z } from "zod";
+import { gstinSchema } from "@/domain/gst";
 import { DepartmentKind, Role } from "@/constants/enums";
 import { prisma } from "@/server/db/client";
 import { type AccessContext, assertOutletAccess, ForbiddenError, NotFoundError, ValidationError } from "@/server/db/scope";
@@ -58,7 +59,7 @@ export async function getOrganization(db: PrismaClient, ctx: AccessContext) {
 const orgPatch = z.object({
   name: z.string().trim().min(1).max(120).optional(),
   legalName: z.string().trim().max(200).nullable().optional(),
-  gstin: z.string().trim().regex(/^[0-9A-Z]{15}$/, "GSTIN must be 15 characters (digits / capitals)").nullable().optional(),
+  gstin: gstinSchema.nullable().optional(),
   timezone: z.string().refine(isValidTimeZone, "Unknown IANA timezone").optional(),
 }).strict();
 
@@ -296,7 +297,7 @@ export async function listDrawerSessions(db: PrismaClient, ctx: AccessContext, i
   });
   const users = await db.user.findMany({ where: { id: { in: [...new Set(rows.map((r) => r.openedById ?? ""))] } }, select: { id: true, name: true } });
   const names = new Map(users.map((u) => [u.id, u.name]));
-  return paged(rows.map((r) => ({ ...r, openingFloat: num(r.openingFloat), closingCount: r.closingCount === null ? null : num(r.closingCount), openedByName: r.openedById ? names.get(r.openedById) ?? null : null })), f.take);
+  return paged(rows.map((r) => ({ ...r, openingFloat: num(r.openingFloat), closingCount: r.closingCount === null ? null : num(r.closingCount), expectedCash: r.expectedCash === null ? null : num(r.expectedCash), variance: r.variance === null ? null : num(r.variance), openedByName: r.openedById ? names.get(r.openedById) ?? null : null })), f.take);
 }
 
 // ============================================================

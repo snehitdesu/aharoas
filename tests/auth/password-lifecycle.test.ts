@@ -20,6 +20,7 @@ import { POST as resetRoute } from "@/app/api/auth/password/reset/route";
 import { POST as completeRoute } from "@/app/api/auth/password/complete/route";
 import { POST as changeRoute } from "@/app/api/auth/password/change/route";
 import * as StaffApi from "@/app/api/staff/[[...path]]/route";
+import { POST as reauthRoute } from "@/app/api/auth/reauth/route";
 
 const RUN = Date.now().toString(36);
 const GOOD = "Kitchen#Pass42";
@@ -183,6 +184,12 @@ describe("staff setup link", () => {
       );
     expect((await call(null)).status).toBe(401);
     expect((await call(cashToken)).status).toBe(403);
+    // Issuing a password link is a sensitive staff action: it needs a fresh password confirmation.
+    const unconfirmed = await json(await call(mgrToken));
+    expect(unconfirmed.status).toBe(403);
+    expect(unconfirmed.body.error.code).toBe("ReauthRequiredError");
+    await prisma.user.update({ where: { id: mgrAId }, data: { passwordHash: await hashPassword(GOOD) } });
+    expect((await reauthRoute(req("/api/auth/reauth", { password: GOOD, scope: "staff.manage" }, { cookie: `${SESSION_COOKIE}=${mgrToken}` }))).status).toBe(200);
     const ok = await json(await call(mgrToken));
     expect(ok.status).toBe(200);
     expect(ok.body.data.token).toMatch(/^[A-Za-z0-9_-]{43}$/);

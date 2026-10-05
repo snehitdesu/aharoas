@@ -25,6 +25,7 @@ export type NormalizedOrder = {
   /** Provider's webhook event id — used for webhook idempotency. */
   eventId: string;
   /** Internal outlet id this order belongs to (provider store -> our outlet). */
+  /** Internal outlet. From a webhook this is set from the tenant binding; a body value is only a hint that must match. */
   outletId: string;
   source: OrderSource;
   channel: OrderChannel;
@@ -41,7 +42,18 @@ export type NormalizedOrder = {
 
 export interface POSProvider {
   readonly name: string;
-  verifyWebhook(rawBody: string, signature: string | undefined): boolean;
+  /**
+   * Verify the webhook signature. `secret` is the tenant's own signing secret
+   * (IntegrationConnection) when one is configured; otherwise the adapter's
+   * deployment-wide secret applies.
+   */
+  verifyWebhook(rawBody: string, signature: string | undefined, secret?: string): boolean;
+  /**
+   * The provider's identifier for the sending account/store, read from the
+   * (not yet verified) payload. Used ONLY to look up the tenant binding and its
+   * secret; never trusted as an internal organization/outlet id.
+   */
+  accountRef(payload: unknown): string | undefined;
   normalizeOrder(payload: unknown): NormalizedOrder;
   /** For nightly reconciliation: settled orders in a date range. */
   getSettledOrders(range: { from: Date; to: Date; outletId?: string }): Promise<NormalizedOrder[]>;

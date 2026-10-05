@@ -63,7 +63,7 @@ describe("organization", () => {
     await expect(updateOrganization(mgrA, { name: "Hijack" })).rejects.toBeInstanceOf(ForbiddenError);
     await expect(updateOrganization(owner, { timezone: "Mars/Olympus" })).rejects.toBeInstanceOf(ZodError);
     await expect(updateOrganization(owner, { currency: "USD" } as never)).rejects.toBeInstanceOf(ZodError); // currency is not editable
-    expect((await updateOrganization(owner, { name: `Renamed ${RUN}`, gstin: "29ABCDE1234F1Z5" })).name).toBe(`Renamed ${RUN}`);
+    expect((await updateOrganization(owner, { name: `Renamed ${RUN}`, gstin: "29ABCDE1234F1ZW" })).name).toBe(`Renamed ${RUN}`);
     expect(await prisma.auditLog.count({ where: { organizationId: orgId, entityType: "Organization" } })).toBe(1);
     expect((await getOrganization(prisma, org2)).id).not.toBe(orgId); // always the caller's own org
   });

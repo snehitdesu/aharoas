@@ -5,6 +5,7 @@
 
 # next
 /.next/
+/.next-desktop/
 /out/
 next-env.d.ts
 
@@ -29,8 +30,10 @@ npm-debug.log*
 .vscode/*
 !.vscode/extensions.json
 
-# generated PostgreSQL variant (npm run db:pg:schema)
-/prisma/postgres/
+# generated PostgreSQL variant (npm run db:pg:schema) — but its migration
+# history is committed: it is the only replayable path to a production database.
+/prisma/postgres/*
+!/prisma/postgres/migrations/
 
 # Playwright
 /e2e/.auth/
@@ -45,3 +48,9 @@ npm-debug.log*
 # desktop build output (npm run desktop:build / desktop:dist)
 /dist-desktop/
 /e2e/.results-desktop/
+
+# Backup / DR drill output (encrypted dumps) — never commit
+/drill-backups/
+*.dump
+*.dump.enc
+*.dump.partial

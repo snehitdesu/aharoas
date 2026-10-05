@@ -13,7 +13,7 @@ import { useMemo, useState } from "react";
 import { api } from "@/lib/api/client";
 import { useQuery, usePaged } from "@/lib/hooks/useApi";
 import { useShell, useOutletId } from "@/lib/shellContext";
-import { newIdempotencyKey } from "@/lib/idempotency";
+import { createKeyedSubmitter, newIdempotencyKey } from "@/lib/idempotency";
 import { formatDate, formatDateTime, formatMoney, formatQty, shortRef } from "@/lib/format";
 import { IndentStatus, PurchaseOrderStatus, GRNStatus, PurchaseBillStatus, VendorPaymentMethod, INDENT_TRANSITIONS, PURCHASE_ORDER_TRANSITIONS, GRN_TRANSITIONS, PURCHASE_BILL_TRANSITIONS } from "@/constants/enums";
 import { Button } from "@/components/ui/Button";
@@ -136,7 +136,7 @@ export function IndentDetail({ id }: { id: string }) {
           <Card className="mb-4"><Details items={[["Created", formatDateTime(d.createdAt, outlet?.timezone)], ["Lines", d.lines?.length ?? 0], ["Notes", d.notes]]} /></Card>
           <DataTable label="Indent lines" rows={d.lines ?? []} rowKey={(l) => l.id}
             columns={[{ key: "m", header: "Material", cell: (l) => materialLabel(materials.byId, l.materialId) }, { key: "q", header: "Qty", numeric: true, cell: (l) => `${formatQty(l.qty)} ${unitOf(materials.byId, l.materialId)}` }]} />
-          <CreatePODialog open={poOpen} onClose={() => setPoOpen(false)} initialLines={(d.lines ?? []).map((l) => ({ materialId: l.materialId, qty: String(Number(l.qty)), rate: "", taxPct: "" }))} />
+          <CreatePODialog open={poOpen} onClose={() => setPoOpen(false)} onDone={() => q.reload()} indentId={d.id} initialLines={(d.lines ?? []).map((l) => ({ materialId: l.materialId, qty: String(Number(l.qty)), rate: "", taxPct: "" }))} />
         </>
       )}
     </DocShell>
@@ -153,7 +153,8 @@ const poFields: LineField[] = [
   { key: "taxPct", label: "Tax %", min: 0 },
 ];
 
-function CreatePODialog({ open, onClose, onDone, initialLines }: { open: boolean; onClose: () => void; onDone?: (id: string) => void; initialLines?: LineDraft[] }) {
+function CreatePODialog({ open, onClose, onDone, initialLines, indentId }: { open: boolean; onClose: () => void; onDone?: (id: string) => void; initialLines?: LineDraft[]; indentId?: string }) {
+  const [submitKeyed] = useState(() => createKeyedSubmitter("po"));
   const router = useRouter();
   const outletId = useOutletId();
   const materials = useMaterials(open);
@@ -169,7 +170,11 @@ function CreatePODialog({ open, onClose, onDone, initialLines }: { open: boolean
   }
   return (
     <FormDialog open={open} onClose={onClose} title="New purchase order" size="lg" submitLabel="Create PO"
-      onSubmit={() => api<PO>("/api/procurement/purchase-orders", { method: "POST", body: { outletId, vendorId, expectedDate: opt(expectedDate), notes: opt(notes), lines: toApiLines(lines, poFields) } })}
+      onSubmit={() => {
+        // Raising a PO from an approved indent closes the indent (server-side).
+        const body = { outletId, vendorId, indentId, expectedDate: opt(expectedDate), notes: opt(notes), lines: toApiLines(lines, poFields) };
+        return submitKeyed(body, (idempotencyKey) => api<PO>("/api/procurement/purchase-orders", { method: "POST", body, idempotencyKey }));
+      }}
       onDone={(r) => { setLines([emptyLine(poFields)]); onDone ? onDone(r.id) : router.push(`/procurement/purchase-orders/${r.id}`); }}>
       <div className="grid gap-3 sm:grid-cols-2">
         <Field label="Vendor" name="vendorId" required><VendorSelect vendors={vendors.items} value={vendorId} onChange={setVendorId} required /></Field>
@@ -277,6 +282,7 @@ const grnFields: LineField[] = [
 ];
 
 function CreateGRNDialog({ open, onClose, onDone, fromPo }: { open: boolean; onClose: () => void; onDone: (id: string) => void; fromPo?: PO }) {
+  const [submitKeyed] = useState(() => createKeyedSubmitter("grn"));
   const outletId = useOutletId();
   const materials = useMaterials(open);
   const vendors = useVendors(open);
@@ -291,7 +297,10 @@ function CreateGRNDialog({ open, onClose, onDone, fromPo }: { open: boolean; onC
   return (
     <FormDialog open={open} onClose={onClose} title={fromPo ? `Receive against PO ${fromPo.number}` : "New goods receipt"} size="lg" submitLabel="Create GRN (draft)"
       description="The GRN is saved as a draft; stock enters the ledger only when it is posted."
-      onSubmit={() => api<GRN>("/api/procurement/grns", { method: "POST", body: { outletId, vendorId, poId: fromPo?.id, notes: opt(notes), lines: toApiLines(lines, grnFields) } })}
+      onSubmit={() => {
+        const body = { outletId, vendorId, poId: fromPo?.id, notes: opt(notes), lines: toApiLines(lines, grnFields) };
+        return submitKeyed(body, (idempotencyKey) => api<GRN>("/api/procurement/grns", { method: "POST", body, idempotencyKey }));
+      }}
       onDone={(r) => onDone(r.id)}>
       <Field label="Vendor" name="vendorId" required>{fromPo ? <Input value={vendorLabel(vendors.byId, vendorId)} disabled /> : <VendorSelect vendors={vendors.items} value={vendorId} onChange={setVendorId} required />}</Field>
       <Field label="Notes" name="notes"><Textarea value={notes} onChange={(e) => setNotes(e.target.value)} /></Field>
@@ -368,6 +377,7 @@ const billFields: LineField[] = [
 ];
 
 function CreateBillDialog({ open, onClose, onDone, fromGrn }: { open: boolean; onClose: () => void; onDone: (id: string) => void; fromGrn?: GRN }) {
+  const [submitKeyed] = useState(() => createKeyedSubmitter("bill"));
   const outletId = useOutletId();
   const materials = useMaterials(open);
   const vendors = useVendors(open);
@@ -378,11 +388,15 @@ function CreateBillDialog({ open, onClose, onDone, fromGrn }: { open: boolean; o
   const [lines, setLines] = useState<LineDraft[]>(initial.length ? initial : [emptyLine(billFields)]);
   return (
     <FormDialog open={open} onClose={onClose} title={fromGrn ? `Bill for GRN ${fromGrn.number}` : "New purchase bill"} size="lg" submitLabel="Create bill"
-      onSubmit={() => api<Bill>("/api/procurement/bills", { method: "POST", body: { outletId, vendorId, grnId: fromGrn?.id, number: opt(number), dueDate: opt(dueDate), lines: toApiLines(lines, billFields) } })}
+      onSubmit={() => {
+        // The vendor's invoice number: the server refuses a second bill for the same vendor invoice.
+        const body = { outletId, vendorId, grnId: fromGrn?.id, vendorInvoiceNo: opt(number), dueDate: opt(dueDate), lines: toApiLines(lines, billFields) };
+        return submitKeyed(body, (idempotencyKey) => api<Bill>("/api/procurement/bills", { method: "POST", body, idempotencyKey }));
+      }}
       onDone={(r) => onDone(r.id)}>
       <div className="grid gap-3 sm:grid-cols-3">
         <Field label="Vendor" name="vendorId" required>{fromGrn ? <Input value={vendorLabel(vendors.byId, vendorId)} disabled /> : <VendorSelect vendors={vendors.items} value={vendorId} onChange={setVendorId} required />}</Field>
-        <Field label="Vendor bill no." name="number" hint="Blank = auto-numbered"><Input value={number} onChange={(e) => setNumber(e.target.value)} maxLength={60} /></Field>
+        <Field label="Vendor invoice no." name="vendorInvoiceNo" hint="Recorded once per vendor"><Input value={number} onChange={(e) => setNumber(e.target.value)} maxLength={64} /></Field>
         <Field label="Due date" name="dueDate"><Input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} /></Field>
       </div>
       <LineEditor fields={billFields} lines={lines} onChange={setLines} materials={materials.items} />

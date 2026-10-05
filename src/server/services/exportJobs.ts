@@ -50,6 +50,8 @@ import { writeAudit } from "@/server/audit/log";
 import { REPORTS, runReport } from "@/server/services/reports";
 import { resolveDateFilters } from "@/server/services/businessDay";
 import { toCSV, type CsvColumn } from "@/domain/csv";
+import { log } from "@/server/observability/log";
+import { inc } from "@/server/observability/metrics";
 
 type Client = PrismaClient | Prisma.TransactionClient;
 
@@ -169,12 +171,12 @@ export class BackgroundExportRunner implements ExportRunner {
           await processExportJob(id, this.deps);
         } catch (e) {
           // processExportJob records failures itself; this only guards the queue.
-          console.error(`[exports] runner error for job ${id}:`, e);
+          log.error("export runner error", { event: "export_runner_error", jobId: id, error: e });
         }
       }
       if (Date.now() - this.lastPurge > PURGE_INTERVAL_MS) {
         this.lastPurge = Date.now();
-        await purgeExpiredExports(this.deps).catch((e) => console.error("[exports] purge failed:", e));
+        await purgeExpiredExports(this.deps).catch((e) => log.error("export purge failed", { event: "export_purge_failed", error: e }));
       }
     } finally {
       this.draining = null;
@@ -310,7 +312,10 @@ export async function processExportJob(jobId: string, deps: RunnerDeps = {}): Pr
     }
     const err = e as { status?: number; message?: string };
     const safe = typeof err?.status === "number" && err.status < 500;
-    if (!safe) console.error(`[exports] job ${jobId} failed:`, e);
+    if (!safe) {
+      inc("restora_job_failures_total", { type: "export" });
+      log.error("export job failed", { event: "export_failed", jobId, error: e });
+    }
     await failJob(db, job, "EXPORT_FAILED", safe ? String(err.message) : EXPORT_MESSAGES.internal);
     return "FAILED";
   }
@@ -373,7 +378,7 @@ export async function purgeExpiredExports(deps: RunnerDeps & { now?: Date; take?
     });
     if (!done) continue;
     purged++;
-    await storage.delete(job.filePath!).catch((e) => console.error(`[exports] could not delete file of expired job ${job.id}:`, e));
+    await storage.delete(job.filePath!).catch((e) => log.error("could not delete expired export file", { event: "export_purge_failed", jobId: job.id, error: e }));
   }
   return purged;
 }
@@ -387,11 +392,21 @@ export async function purgeExpiredExports(deps: RunnerDeps & { now?: Date; take?
 export async function recoverExportJobs(deps: RunnerDeps & { runner?: ExportRunner; now?: Date } = {}) {
   const db = deps.db ?? prisma;
   const now = deps.now ?? new Date();
-  const stale = await db.exportJob.findMany({ where: { status: "RUNNING", OR: [{ startedAt: { lt: new Date(now.getTime() - exportStaleMs()) } }, { startedAt: null }] } });
-  for (const job of stale) await failJob(db, job, "EXPORT_FAILED", EXPORT_MESSAGES.interrupted, { reason: "interrupted" });
+  const interrupted = await failStaleExportJobs(db, now);
   const pending = await db.exportJob.findMany({ where: { status: "PENDING" }, orderBy: { createdAt: "asc" }, select: { id: true }, take: 1000 });
   const runner = deps.runner ?? getExportRunner(db, deps.storage);
   for (const j of pending) await runner.enqueue(j.id);
   const purged = await purgeExpiredExports({ db, storage: deps.storage, now });
-  return { interrupted: stale.length, requeued: pending.length, purged };
+  return { interrupted, requeued: pending.length, purged };
+}
+
+/**
+ * RUNNING jobs older than the stale threshold were interrupted (crash/restart)
+ * -> FAILED, never re-run (a job is never executed twice). Called at startup
+ * and periodically by the maintenance worker (ops/worker.ts). Returns the count.
+ */
+export async function failStaleExportJobs(db: PrismaClient = prisma, now = new Date()): Promise<number> {
+  const stale = await db.exportJob.findMany({ where: { status: "RUNNING", OR: [{ startedAt: { lt: new Date(now.getTime() - exportStaleMs()) } }, { startedAt: null }] } });
+  for (const job of stale) await failJob(db, job, "EXPORT_FAILED", EXPORT_MESSAGES.interrupted, { reason: "interrupted" });
+  return stale.length;
 }

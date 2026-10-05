@@ -117,6 +117,7 @@ export function PaymentDialog({ orderId, onClose, onSettled }: { orderId: string
         <div role="status" className="space-y-2 text-center">
           <p className="text-lg font-semibold text-ok-500">Paid in full</p>
           {phase.change > 0 && <p className="text-2xl font-semibold tabular-nums">Change {formatMoney(phase.change)}</p>}
+          <a href={`/pos/bill/${order.id}`} className="inline-block text-sm font-medium text-brand-700 hover:underline">Print receipt</a>
         </div>
       ) : (
         <div className="space-y-4">

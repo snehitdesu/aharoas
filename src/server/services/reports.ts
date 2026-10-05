@@ -23,13 +23,15 @@ import { prisma } from "@/server/db/client";
 import { type AccessContext, assertOutletAccess, NotFoundError, ValidationError } from "@/server/db/scope";
 import { assertCan, type Permission } from "@/server/auth/rbac";
 import { writeAudit } from "@/server/audit/log";
-import { authorizedOutletIds, dailySales, itemSales, categorySales } from "@/server/services/analytics";
+import { authorizedOutletIds, dailySales, itemSales, categorySales, salesTrend, outletComparison, variantSales, modifierSales, materialConsumption, stockAgeing, vendorPurchasing, purchaseTrend, SETTLED_ORDER_STATUSES } from "@/server/services/analytics";
 import { vendorDues } from "@/server/services/procurement";
 import { computePnL } from "@/server/services/finance";
 import { segmentFor } from "@/server/services/crm";
 import { toCSV, type CsvColumn } from "@/domain/csv";
 import { resolveDateFilters } from "@/server/services/businessDay";
 import { D, money, num } from "@/domain/money";
+import { taxSummary } from "@/server/services/invoicing";
+import { vendorAging } from "@/server/services/vendorFinance";
 
 // ---------------- filters ----------------
 
@@ -89,6 +91,7 @@ function customerScope(ctx: AccessContext, ids: string[], explicitOutlet: boolea
 }
 
 const WASTE_TYPES = ["WASTAGE", "SPOILAGE", "STAFF_MEAL"];
+const FINANCE_ENTITY_TYPES = ["Payment", "Refund", "TaxInvoice", "Expense", "ExpenseCategory", "PettyCashTxn", "CashDrawerSession", "CashDrawerMovement", "VendorPayment", "PurchaseBill", "Reconciliation", "Order"];
 
 // ---------------- registry ----------------
 
@@ -106,6 +109,7 @@ export const REPORTS: Record<string, AnyReport> = {
       { key: "orders", header: "Orders", value: (r) => r.orders }, { key: "covers", header: "Covers", value: (r) => r.covers },
       { key: "grossSales", header: "Gross sales", value: (r) => r.grossSales }, { key: "discounts", header: "Discounts", value: (r) => r.discounts },
       { key: "taxes", header: "Taxes", value: (r) => r.taxes }, { key: "total", header: "Total", value: (r) => r.total },
+      { key: "refunds", header: "Refunds", value: (r) => r.refunds }, { key: "netSales", header: "Net sales (ex tax)", value: (r) => r.netSales },
     ]),
 
   ITEM_SALES: define({
@@ -114,14 +118,103 @@ export const REPORTS: Record<string, AnyReport> = {
     run: async ({ db, ctx, f, ...w }) => windowed(await itemSales(db, ctx, f), w),
   })([
       { key: "item", header: "Item", value: (r) => r.name }, { key: "menuItemId", header: "Menu item id", value: (r) => r.menuItemId ?? "UNMAPPED" },
-      { key: "qty", header: "Qty", value: (r) => r.qty }, { key: "revenue", header: "Revenue", value: (r) => r.revenue },
+      { key: "qty", header: "Qty", value: (r) => r.qty }, { key: "grossRevenue", header: "Gross revenue", value: (r) => r.grossRevenue },
+      { key: "discount", header: "Discount", value: (r) => r.discount }, { key: "refundedQty", header: "Refunded qty", value: (r) => r.refundedQty },
+      { key: "refundedRevenue", header: "Refunded revenue", value: (r) => r.refundedRevenue }, { key: "revenue", header: "Net revenue", value: (r) => r.revenue },
+      { key: "contributionPct", header: "Share %", value: (r) => r.contributionPct },
     ]),
 
   CATEGORY_SALES: define({
     id: "CATEGORY_SALES", title: "Category sales", permission: "reports.view", maxRows: 1000, aggregate: true,
     schema: baseFilter.refine(rangeOk, RANGE_MSG),
     run: async ({ db, ctx, f, ...w }) => windowed(await categorySales(db, ctx, f), w),
-  })([{ key: "category", header: "Category", value: (r) => r.category }, { key: "qty", header: "Qty", value: (r) => r.qty }, { key: "revenue", header: "Revenue", value: (r) => r.revenue }]),
+  })([
+      { key: "category", header: "Category", value: (r) => r.category }, { key: "items", header: "Items", value: (r) => r.items }, { key: "qty", header: "Qty", value: (r) => r.qty },
+      { key: "grossRevenue", header: "Gross revenue", value: (r) => r.grossRevenue }, { key: "discount", header: "Discount", value: (r) => r.discount },
+      { key: "refundedRevenue", header: "Refunded revenue", value: (r) => r.refundedRevenue }, { key: "revenue", header: "Net revenue", value: (r) => r.revenue },
+      { key: "contributionPct", header: "Share %", value: (r) => r.contributionPct },
+    ]),
+
+  SALES_TREND: define({
+    id: "SALES_TREND", title: "Sales trend (day / week / month)", permission: "reports.view", maxRows: 5000, aggregate: true,
+    schema: baseFilter.extend({ granularity: z.enum(["day", "week", "month"]).default("day") }).refine(rangeOk, RANGE_MSG),
+    run: async ({ db, ctx, f, ...w }) => windowed(await salesTrend(db, ctx, f), w),
+  })([
+      { key: "period", header: "Period", value: (r) => r.period }, { key: "orders", header: "Orders", value: (r) => r.orders },
+      { key: "grossSales", header: "Gross sales", value: (r) => r.grossSales }, { key: "discounts", header: "Discounts", value: (r) => r.discounts },
+      { key: "refunds", header: "Refunds", value: (r) => r.refunds }, { key: "netSales", header: "Net sales (ex tax)", value: (r) => r.netSales },
+      { key: "taxes", header: "Taxes", value: (r) => r.taxes }, { key: "total", header: "Billed total", value: (r) => r.total }, { key: "aov", header: "AOV", value: (r) => r.aov },
+    ]),
+
+  OUTLET_COMPARISON: define({
+    id: "OUTLET_COMPARISON", title: "Outlet comparison", permission: "reports.view", maxRows: 1000, aggregate: true,
+    schema: baseFilter.refine(rangeOk, RANGE_MSG),
+    run: async ({ db, ctx, f, ...w }) => windowed(await outletComparison(db, ctx, f), w),
+  })([
+      { key: "outlet", header: "Outlet", value: (r) => r.outlet }, { key: "orders", header: "Orders", value: (r) => r.orders }, { key: "refundedOrders", header: "Refunded orders", value: (r) => r.refundedOrders },
+      { key: "grossSales", header: "Gross sales", value: (r) => r.grossSales }, { key: "discounts", header: "Discounts", value: (r) => r.discounts },
+      { key: "refunds", header: "Refunds", value: (r) => r.refunds }, { key: "netSales", header: "Net sales (ex tax)", value: (r) => r.netSales },
+      { key: "aov", header: "AOV", value: (r) => r.aov }, { key: "sharePct", header: "Share %", value: (r) => r.sharePct },
+    ]),
+
+  VARIANT_SALES: define({
+    id: "VARIANT_SALES", title: "Variant sales", permission: "reports.view", maxRows: 5000, aggregate: true,
+    schema: baseFilter.refine(rangeOk, RANGE_MSG),
+    run: async ({ db, ctx, f, ...w }) => windowed(await variantSales(db, ctx, f), w),
+  })([
+      { key: "item", header: "Item", value: (r) => r.item }, { key: "variant", header: "Variant", value: (r) => r.variant }, { key: "qty", header: "Qty", value: (r) => r.qty },
+      { key: "grossRevenue", header: "Gross revenue", value: (r) => r.grossRevenue }, { key: "discount", header: "Discount", value: (r) => r.discount },
+      { key: "revenue", header: "Net revenue", value: (r) => r.revenue }, { key: "contributionPct", header: "Share %", value: (r) => r.contributionPct },
+    ]),
+
+  MODIFIER_SALES: define({
+    id: "MODIFIER_SALES", title: "Modifier / add-on sales", permission: "reports.view", maxRows: 5000, aggregate: true,
+    schema: baseFilter.refine(rangeOk, RANGE_MSG),
+    run: async ({ db, ctx, f, ...w }) => windowed(await modifierSales(db, ctx, f), w),
+  })([
+      { key: "modifier", header: "Modifier", value: (r) => r.modifier }, { key: "lines", header: "Lines", value: (r) => r.lines },
+      { key: "qty", header: "Qty", value: (r) => r.qty }, { key: "addOnValue", header: "Add-on value", value: (r) => r.addOnValue },
+    ]),
+
+  MATERIAL_CONSUMPTION: define({
+    id: "MATERIAL_CONSUMPTION", title: "Material consumption & wastage", permission: "reports.view", maxRows: 5000, aggregate: true,
+    schema: baseFilter.refine(rangeOk, RANGE_MSG),
+    run: async ({ db, ctx, f, ...w }) => windowed(await materialConsumption(db, ctx, f), w),
+  })([
+      { key: "material", header: "Material", value: (r) => r.material }, { key: "unit", header: "Unit", value: (r) => r.unit },
+      { key: "saleQty", header: "Sold (qty)", value: (r) => r.saleQty }, { key: "productionQty", header: "Production (qty)", value: (r) => r.productionQty },
+      { key: "issueQty", header: "Issued (qty)", value: (r) => r.issueQty }, { key: "wastageQty", header: "Wasted (qty)", value: (r) => r.wastageQty },
+      { key: "consumedValue", header: "Consumed value", value: (r) => r.consumedValue }, { key: "wastageValue", header: "Wastage value", value: (r) => r.wastageValue },
+      { key: "wastagePct", header: "Wastage %", value: (r) => r.wastagePct },
+    ]),
+
+  STOCK_AGEING: define({
+    id: "STOCK_AGEING", title: "Slow-moving & dead stock", permission: "reports.view", maxRows: 5000, aggregate: true,
+    schema: baseFilter.extend({ lookbackDays: z.coerce.number().int().min(1).max(365).optional() }),
+    // Point in time (now); `lookbackDays` sets the usage window.
+    run: async ({ db, ctx, f, ...w }) => windowed(await stockAgeing(db, ctx, { outletId: f.outletId, lookbackDays: f.lookbackDays }), w),
+  })([
+      { key: "outlet", header: "Outlet", value: (r) => r.outlet }, { key: "material", header: "Material", value: (r) => r.material }, { key: "unit", header: "Unit", value: (r) => r.unit },
+      { key: "status", header: "Status", value: (r) => r.status }, { key: "onHand", header: "On hand", value: (r) => r.onHand }, { key: "value", header: "Stock value", value: (r) => r.value },
+      { key: "usedQty", header: "Used in window (qty)", value: (r) => r.usedQty }, { key: "daysOfCover", header: "Days of cover", value: (r) => r.daysOfCover },
+      { key: "lastUsedAt", header: "Last used", value: (r) => r.lastUsedAt },
+    ]),
+
+  PURCHASE_TREND: define({
+    id: "PURCHASE_TREND", title: "Purchase trend", permission: "reports.view", maxRows: 5000, aggregate: true,
+    schema: baseFilter.extend({ granularity: z.enum(["day", "week", "month"]).default("month") }).refine(rangeOk, RANGE_MSG),
+    run: async ({ db, ctx, f, ...w }) => windowed(await purchaseTrend(db, ctx, f), w),
+  })([{ key: "period", header: "Period", value: (r) => r.period }, { key: "receipts", header: "Receipt lines", value: (r) => r.receipts }, { key: "value", header: "Received value", value: (r) => r.value }]),
+
+  VENDOR_PURCHASING: define({
+    id: "VENDOR_PURCHASING", title: "Vendor purchasing", permission: "purchase.view", maxRows: 5000, aggregate: true,
+    schema: baseFilter.refine(rangeOk, RANGE_MSG),
+    run: async ({ db, ctx, f, ...w }) => windowed(await vendorPurchasing(db, ctx, f), w),
+  })([
+      { key: "vendor", header: "Vendor", value: (r) => r.vendor }, { key: "receipts", header: "GRNs", value: (r) => r.receipts }, { key: "receivedValue", header: "Received value", value: (r) => r.receivedValue },
+      { key: "bills", header: "Bills", value: (r) => r.bills }, { key: "billedTotal", header: "Billed total", value: (r) => r.billedTotal }, { key: "billedTax", header: "Bill tax", value: (r) => r.billedTax },
+      { key: "paidOnBills", header: "Paid", value: (r) => r.paidOnBills }, { key: "dueOnBills", header: "Due", value: (r) => r.dueOnBills },
+    ]),
 
   ORDERS: define({
     id: "ORDERS", title: "Orders (sales)", permission: "reports.view", maxRows: 10000, aggregate: false,
@@ -268,6 +361,55 @@ export const REPORTS: Record<string, AnyReport> = {
       { key: "material", header: "Material", value: (r) => r.material.name }, { key: "qty", header: "Qty", value: (r) => num(D(r.qty).abs()) }, { key: "cost", header: "Cost impact", value: (r) => num(D(r.amount).abs()) },
     ]),
 
+  STOCK_COUNT_VARIANCE: define({
+    id: "STOCK_COUNT_VARIANCE", title: "Stock count variance (physical vs system)", permission: "inventory.view", maxRows: 10000, aggregate: false,
+    schema: baseFilter.refine(rangeOk, RANGE_MSG),
+    // Approved counts only (their variance was posted as COUNT_ADJUSTMENT); dated by approval.
+    run: async ({ db, ctx, f, limit, offset }) => {
+      const ids = authorizedOutletIds(ctx, { outletId: f.outletId }, "inventory.view");
+      if (!ids.length) return [];
+      const rows = await db.stockCountLine.findMany({
+        where: { organizationId: ctx.organizationId, count: { status: "APPROVED", outletId: { in: ids }, ...(dateRange(f) ? { approvedAt: dateRange(f) } : {}) } },
+        orderBy: [{ count: { approvedAt: "asc" } }, { id: "asc" }],
+        skip: offset,
+        take: limit + 1,
+        include: { count: { select: { number: true, outletId: true, approvedAt: true } } },
+      });
+      const materials = await db.material.findMany({ where: { organizationId: ctx.organizationId, id: { in: [...new Set(rows.map((r) => r.materialId))] } }, select: { id: true, sku: true, name: true, baseUnit: { select: { code: true } } } });
+      const m = new Map(materials.map((x) => [x.id, x]));
+      const codes = await outletCodes(db, ctx, ids);
+      return rows.map((r) => ({ ...r, outlet: codes.get(r.count.outletId), material: m.get(r.materialId) }));
+    },
+  })([
+      { key: "approved", header: "Approved", value: (r) => r.count.approvedAt }, { key: "outlet", header: "Outlet", value: (r) => r.outlet }, { key: "count", header: "Count", value: (r) => r.count.number },
+      { key: "sku", header: "SKU", value: (r) => r.material?.sku }, { key: "material", header: "Material", value: (r) => r.material?.name }, { key: "unit", header: "Unit", value: (r) => r.material?.baseUnit.code },
+      { key: "book", header: "System qty", value: (r) => num(r.bookQty) }, { key: "physical", header: "Physical qty", value: (r) => num(r.physicalQty) },
+      { key: "variance", header: "Variance", value: (r) => num(r.variance) }, { key: "costImpact", header: "Cost impact", value: (r) => num(r.costImpact) },
+    ]),
+
+  STOCK_ADJUSTMENTS: define({
+    id: "STOCK_ADJUSTMENTS", title: "Stock adjustments", permission: "inventory.view", maxRows: 10000, aggregate: false,
+    schema: baseFilter.refine(rangeOk, RANGE_MSG),
+    // Manual adjustments (reason in the note), count adjustments, opening stock and corrections.
+    run: async ({ db, ctx, f, limit, offset }) => {
+      const ids = authorizedOutletIds(ctx, { outletId: f.outletId }, "inventory.view");
+      if (!ids.length) return [];
+      const rows = await db.inventoryLedger.findMany({
+        where: { organizationId: ctx.organizationId, outletId: { in: ids }, txnType: { in: ["OTHER_ADJUSTMENT", "COUNT_ADJUSTMENT", "OPENING_BALANCE"] }, ...(dateRange(f) ? { createdAt: dateRange(f) } : {}) },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+        skip: offset,
+        take: limit + 1,
+        include: { material: { select: { sku: true, name: true } } },
+      });
+      const codes = await outletCodes(db, ctx, ids);
+      return rows.map((r) => ({ ...r, outlet: codes.get(r.outletId) }));
+    },
+  })([
+      { key: "date", header: "Date", value: (r) => r.createdAt }, { key: "outlet", header: "Outlet", value: (r) => r.outlet }, { key: "txnType", header: "Type", value: (r) => r.txnType },
+      { key: "sku", header: "SKU", value: (r) => r.material.sku }, { key: "material", header: "Material", value: (r) => r.material.name }, { key: "qty", header: "Qty", value: (r) => num(r.qty) },
+      { key: "value", header: "Value", value: (r) => num(r.amount) }, { key: "reason", header: "Reason / note", value: (r) => r.note }, { key: "actor", header: "By", value: (r) => r.actorId },
+    ]),
+
   PAYMENTS: define({
     id: "PAYMENTS", title: "Payments", permission: "finance.view", maxRows: 10000, aggregate: false,
     schema: baseFilter.extend({ status: PaymentStatus.zod.optional(), method: PaymentMethod.zod.optional() }).refine(rangeOk, RANGE_MSG),
@@ -318,7 +460,7 @@ export const REPORTS: Record<string, AnyReport> = {
       const ids = authorizedOutletIds(ctx, { outletId: f.outletId }, "finance.view");
       if (!ids.length) return [];
       const rows = await db.expense.findMany({
-        where: { organizationId: ctx.organizationId, outletId: { in: ids }, ...(dateRange(f) ? { spentAt: dateRange(f) } : {}), ...(f.category ? { category: f.category } : {}) },
+        where: { organizationId: ctx.organizationId, outletId: { in: ids }, voidedAt: null, ...(dateRange(f) ? { spentAt: dateRange(f) } : {}), ...(f.category ? { category: f.category } : {}) },
         orderBy: [{ spentAt: "asc" }, { id: "asc" }],
         skip: offset,
         take: limit + 1,
@@ -329,6 +471,166 @@ export const REPORTS: Record<string, AnyReport> = {
   })([
       { key: "date", header: "Date", value: (r) => r.spentAt }, { key: "outlet", header: "Outlet", value: (r) => r.outlet }, { key: "category", header: "Category", value: (r) => r.category },
       { key: "amount", header: "Amount", value: (r) => num(r.amount) }, { key: "paidVia", header: "Paid via", value: (r) => r.paidVia }, { key: "description", header: "Description", value: (r) => r.description },
+    ]),
+
+  // ---------------- Phase 4 finance ----------------
+
+  TAX_SUMMARY: define({
+    id: "TAX_SUMMARY", title: "Tax summary (invoices and credit notes by rate)", permission: "finance.view", maxRows: 1000, aggregate: true,
+    schema: baseFilter.refine(rangeOk, RANGE_MSG),
+    run: async ({ db, ctx, f, ...w }) => windowed(await taxSummary(db, ctx, { outletIds: authorizedOutletIds(ctx, { outletId: f.outletId }, "finance.view"), from: f.from, to: f.to }), w),
+  })([
+      { key: "kind", header: "Document", value: (r) => r.kind }, { key: "rate", header: "Rate %", value: (r) => r.ratePct }, { key: "documents", header: "Documents", value: (r) => r.documents },
+      { key: "taxable", header: "Taxable value", value: (r) => r.taxableValue }, { key: "cgst", header: "CGST", value: (r) => r.cgst }, { key: "sgst", header: "SGST", value: (r) => r.sgst },
+      { key: "igst", header: "IGST", value: (r) => r.igst }, { key: "totalTax", header: "Total tax", value: (r) => r.totalTax },
+    ]),
+
+  INVOICES: define({
+    id: "INVOICES", title: "Invoice register", permission: "finance.view", maxRows: 10000, aggregate: false,
+    schema: baseFilter.refine(rangeOk, RANGE_MSG),
+    run: async ({ db, ctx, f, limit, offset }) => {
+      const ids = authorizedOutletIds(ctx, { outletId: f.outletId }, "finance.view");
+      if (!ids.length) return [];
+      const rows = await db.taxInvoice.findMany({
+        where: { organizationId: ctx.organizationId, outletId: { in: ids }, ...(dateRange(f) ? { issuedAt: dateRange(f) } : {}) },
+        orderBy: [{ issuedAt: "asc" }, { seq: "asc" }, { id: "asc" }], skip: offset, take: limit + 1,
+      });
+      const codes = await outletCodes(db, ctx, ids);
+      return rows.map((r) => ({ ...r, outlet: codes.get(r.outletId) }));
+    },
+  })([
+      { key: "date", header: "Issued", value: (r) => r.issuedAt }, { key: "outlet", header: "Outlet", value: (r) => r.outlet }, { key: "number", header: "Number", value: (r) => r.number },
+      { key: "kind", header: "Document", value: (r) => r.kind }, { key: "orderId", header: "Order", value: (r) => r.orderId }, { key: "sellerGstin", header: "Seller GSTIN", value: (r) => r.sellerGstin },
+      { key: "buyerGstin", header: "Buyer GSTIN", value: (r) => r.buyerGstin }, { key: "supplyType", header: "Supply", value: (r) => r.supplyType },
+      { key: "taxable", header: "Taxable value", value: (r) => num(r.taxableValue) }, { key: "cgst", header: "CGST", value: (r) => num(r.cgst) }, { key: "sgst", header: "SGST", value: (r) => num(r.sgst) },
+      { key: "igst", header: "IGST", value: (r) => num(r.igst) }, { key: "total", header: "Total", value: (r) => num(r.total) },
+    ]),
+
+  SALES_VS_PAYMENTS: define({
+    id: "SALES_VS_PAYMENTS", title: "Sales vs payments", permission: "finance.view", maxRows: 1000, aggregate: true,
+    schema: baseFilter.refine(rangeOk, RANGE_MSG),
+    // Per outlet for the period: settled sales (PAID + REFUNDED orders) against money collected and refunded.
+    run: async ({ db, ctx, f, ...w }) => {
+      const ids = authorizedOutletIds(ctx, { outletId: f.outletId }, "finance.view");
+      if (!ids.length) return [];
+      const at = dateRange(f);
+      const [sales, collected, refunds, codes] = await Promise.all([
+        db.order.groupBy({ by: ["outletId"], where: { organizationId: ctx.organizationId, outletId: { in: ids }, status: { in: SETTLED_ORDER_STATUSES }, ...(at ? { createdAt: at } : {}) }, _sum: { total: true }, _count: true }),
+        db.payment.groupBy({ by: ["outletId"], where: { organizationId: ctx.organizationId, outletId: { in: ids }, status: { in: ["SUCCESS", "PARTIAL", "REFUNDED"] }, ...(at ? { createdAt: at } : {}) }, _sum: { amount: true } }),
+        db.refund.groupBy({ by: ["outletId"], where: { organizationId: ctx.organizationId, outletId: { in: ids }, ...(at ? { createdAt: at } : {}) }, _sum: { amount: true } }),
+        outletCodes(db, ctx, ids),
+      ]);
+      const rows = ids.map((id) => {
+        const s = D(sales.find((x) => x.outletId === id)?._sum.total ?? 0);
+        const c = D(collected.find((x) => x.outletId === id)?._sum.amount ?? 0);
+        const r = D(refunds.find((x) => x.outletId === id)?._sum.amount ?? 0);
+        return { outlet: codes.get(id), orders: sales.find((x) => x.outletId === id)?._count ?? 0, sales: num(money(s)), collected: num(money(c)), refunded: num(money(r)), netCollected: num(money(c.minus(r))), difference: num(money(c.minus(s))) };
+      });
+      return windowed(rows, w);
+    },
+  })([
+      { key: "outlet", header: "Outlet", value: (r) => r.outlet }, { key: "orders", header: "Settled orders", value: (r) => r.orders }, { key: "sales", header: "Sales", value: (r) => r.sales },
+      { key: "collected", header: "Collected", value: (r) => r.collected }, { key: "refunded", header: "Refunded", value: (r) => r.refunded }, { key: "netCollected", header: "Net collected", value: (r) => r.netCollected },
+      { key: "difference", header: "Collected − sales", value: (r) => r.difference },
+    ]),
+
+  CASH_DRAWER: define({
+    id: "CASH_DRAWER", title: "Cash drawer sessions", permission: "finance.view", maxRows: 10000, aggregate: false,
+    schema: baseFilter.refine(rangeOk, RANGE_MSG),
+    run: async ({ db, ctx, f, limit, offset }) => {
+      const ids = authorizedOutletIds(ctx, { outletId: f.outletId }, "finance.view");
+      if (!ids.length) return [];
+      const rows = await db.cashDrawerSession.findMany({
+        where: { organizationId: ctx.organizationId, outletId: { in: ids }, ...(dateRange(f) ? { openedAt: dateRange(f) } : {}) },
+        orderBy: [{ openedAt: "asc" }, { id: "asc" }], skip: offset, take: limit + 1,
+        include: { movements: { select: { type: true, amount: true } } },
+      });
+      const codes = await outletCodes(db, ctx, ids);
+      return rows.map((r) => ({
+        ...r, outlet: codes.get(r.outletId),
+        payIn: num(money(r.movements.filter((m) => m.type === "PAY_IN").reduce((a, m) => a.plus(D(m.amount)), D(0)))),
+        payOut: num(money(r.movements.filter((m) => m.type === "PAY_OUT").reduce((a, m) => a.plus(D(m.amount)), D(0)))),
+      }));
+    },
+  })([
+      { key: "opened", header: "Opened", value: (r) => r.openedAt }, { key: "closed", header: "Closed", value: (r) => r.closedAt }, { key: "outlet", header: "Outlet", value: (r) => r.outlet },
+      { key: "status", header: "Status", value: (r) => r.status }, { key: "float", header: "Opening float", value: (r) => num(r.openingFloat) }, { key: "payIn", header: "Pay-ins", value: (r) => r.payIn },
+      { key: "payOut", header: "Pay-outs", value: (r) => r.payOut }, { key: "expected", header: "Expected cash", value: (r) => (r.expectedCash === null ? null : num(r.expectedCash)) },
+      { key: "counted", header: "Counted", value: (r) => (r.closingCount === null ? null : num(r.closingCount)) }, { key: "variance", header: "Variance", value: (r) => (r.variance === null ? null : num(r.variance)) },
+    ]),
+
+  VENDOR_AGING: define({
+    id: "VENDOR_AGING", title: "Vendor payables aging", permission: "finance.view", maxRows: 5000, aggregate: true,
+    schema: baseFilter.extend({ vendorId: z.string().optional() }).refine(rangeOk, RANGE_MSG),
+    run: async ({ db, ctx, f, ...w }) => windowed(await vendorAging(db, ctx, { outletId: f.outletId, vendorId: f.vendorId, asOf: f.to }), w),
+  })([
+      { key: "vendor", header: "Vendor", value: (r) => r.vendorName }, { key: "openBills", header: "Open bills", value: (r) => r.openBills }, { key: "current", header: "Not yet due", value: (r) => r.current },
+      { key: "d1_30", header: "1–30 days", value: (r) => r.d1_30 }, { key: "d31_60", header: "31–60 days", value: (r) => r.d31_60 }, { key: "d61_90", header: "61–90 days", value: (r) => r.d61_90 },
+      { key: "d90_plus", header: "90+ days", value: (r) => r.d90_plus }, { key: "totalDue", header: "Total due", value: (r) => r.totalDue }, { key: "advances", header: "Advances", value: (r) => r.advances },
+      { key: "netPayable", header: "Net payable", value: (r) => r.netPayable },
+    ]),
+
+  OUTSTANDING_ORDERS: define({
+    id: "OUTSTANDING_ORDERS", title: "Outstanding order balances", permission: "finance.view", maxRows: 10000, aggregate: false,
+    schema: baseFilter.refine(rangeOk, RANGE_MSG),
+    // Live orders with a balance still to collect (total − SUCCESS/PARTIAL payments).
+    run: async ({ db, ctx, f, limit, offset }) => {
+      const ids = authorizedOutletIds(ctx, { outletId: f.outletId }, "finance.view");
+      if (!ids.length) return [];
+      const rows = await db.order.findMany({
+        where: { organizationId: ctx.organizationId, outletId: { in: ids }, status: { notIn: ["PAID", "CANCELLED", "REFUNDED"] }, total: { gt: 0 }, ...(dateRange(f) ? { createdAt: dateRange(f) } : {}) },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }], skip: offset, take: limit + 1,
+        include: { payments: { where: { status: { in: ["SUCCESS", "PARTIAL"] } }, select: { amount: true } }, table: { select: { code: true } } },
+      });
+      const codes = await outletCodes(db, ctx, ids);
+      return rows.map((r) => {
+        const paid = r.payments.reduce((a, p) => a.plus(D(p.amount)), D(0));
+        return { ...r, outlet: codes.get(r.outletId), paid: num(money(paid)), balance: num(money(D(r.total).minus(paid))) };
+      });
+    },
+  })([
+      { key: "date", header: "Created", value: (r) => r.createdAt }, { key: "outlet", header: "Outlet", value: (r) => r.outlet }, { key: "orderId", header: "Order", value: (r) => r.id },
+      { key: "status", header: "Status", value: (r) => r.status }, { key: "table", header: "Table", value: (r) => r.table?.code }, { key: "total", header: "Total", value: (r) => num(r.total) },
+      { key: "paid", header: "Paid", value: (r) => r.paid }, { key: "balance", header: "Balance", value: (r) => r.balance },
+    ]),
+
+  DISCOUNTS: define({
+    id: "DISCOUNTS", title: "Discounts on paid orders", permission: "finance.view", maxRows: 10000, aggregate: false,
+    schema: baseFilter.refine(rangeOk, RANGE_MSG),
+    run: async ({ db, ctx, f, limit, offset }) => {
+      const ids = authorizedOutletIds(ctx, { outletId: f.outletId }, "finance.view");
+      if (!ids.length) return [];
+      const rows = await db.order.findMany({
+        where: { organizationId: ctx.organizationId, outletId: { in: ids }, status: { in: ["PAID", "REFUNDED"] }, discount: { gt: 0 }, ...(dateRange(f) ? { createdAt: dateRange(f) } : {}) },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }], skip: offset, take: limit + 1,
+      });
+      const codes = await outletCodes(db, ctx, ids);
+      return rows.map((r) => ({ ...r, outlet: codes.get(r.outletId) }));
+    },
+  })([
+      { key: "date", header: "Date", value: (r) => r.createdAt }, { key: "outlet", header: "Outlet", value: (r) => r.outlet }, { key: "orderId", header: "Order", value: (r) => r.id },
+      { key: "invoiceNo", header: "Invoice", value: (r) => r.invoiceNo }, { key: "subtotal", header: "Subtotal", value: (r) => num(r.subtotal) }, { key: "discount", header: "Discount", value: (r) => num(r.discount) },
+      { key: "tax", header: "Tax", value: (r) => num(r.tax) }, { key: "total", header: "Total", value: (r) => num(r.total) },
+    ]),
+
+  FINANCE_AUDIT: define({
+    id: "FINANCE_AUDIT", title: "Financial audit trail", permission: "audit.view", maxRows: 10000, aggregate: false,
+    schema: baseFilter.refine(rangeOk, RANGE_MSG),
+    // Every money-changing event: payments, refunds, invoices, expenses, cash, vendor payables, reconciliations.
+    run: async ({ db, ctx, f, limit, offset }) => {
+      const ids = authorizedOutletIds(ctx, { outletId: f.outletId }, "audit.view");
+      if (!ids.length) return [];
+      const rows = await db.auditLog.findMany({
+        where: { organizationId: ctx.organizationId, outletId: { in: ids }, entityType: { in: FINANCE_ENTITY_TYPES }, ...(dateRange(f) ? { createdAt: dateRange(f) } : {}) },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }], skip: offset, take: limit + 1,
+      });
+      const codes = await outletCodes(db, ctx, ids);
+      return rows.map((r) => ({ ...r, outlet: r.outletId ? codes.get(r.outletId) : undefined }));
+    },
+  })([
+      { key: "date", header: "When", value: (r) => r.createdAt }, { key: "outlet", header: "Outlet", value: (r) => r.outlet }, { key: "actor", header: "By", value: (r) => r.actorId },
+      { key: "action", header: "Action", value: (r) => r.action }, { key: "entity", header: "Entity", value: (r) => r.entityType }, { key: "entityId", header: "Entity id", value: (r) => r.entityId },
+      { key: "before", header: "Before", value: (r) => r.before }, { key: "after", header: "After", value: (r) => r.after },
     ]),
 
   CUSTOMERS: define({
@@ -419,7 +721,7 @@ function cell(v: unknown): unknown {
 }
 
 /** Date-only from/to = whole business days in the outlet's (or org's) timezone. */
-async function normalizeDates(db: PrismaClient, ctx: AccessContext, input: unknown) {
+export async function normalizeDates(db: PrismaClient, ctx: AccessContext, input: unknown) {
   if (!input || typeof input !== "object") return input ?? {};
   const i = input as { outletId?: unknown };
   if (typeof i.outletId === "string" && i.outletId) assertOutletAccess(ctx, i.outletId); // before reading the outlet's timezone

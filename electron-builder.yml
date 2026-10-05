@@ -1,8 +1,14 @@
-# Windows installer for the Aharos desktop app. Run `npm run desktop:dist`
-# (builds the payload with desktop/scripts/build.mjs first).
+# Desktop packages for RESTORA:
+#   Windows: `npm run desktop:dist`      → NSIS installer + portable exe (x64)
+#   macOS:   `npm run desktop:dist:mac`  → RESTORA.app + DMG for the Mac's own arch
+# (both build the payload with desktop/scripts/build.mjs first; packages are
+# built on the target OS — the server payload's native modules are the build
+# machine's, and after-pack.cjs refuses a mismatch).
+# appId, executableName, the <appData>/Aharos data folder and AHAROS_* variables keep the
+# working name on purpose: installed copies upgrade in place and keep their data.
 appId: com.aharos.desktop
-productName: Aharos
-copyright: Copyright © Aharos
+productName: RESTORA
+copyright: Copyright © RESTORA
 electronVersion: 44.5.1
 directories:
   app: build/desktop/app
@@ -18,6 +24,30 @@ files:
 # afterPack hook: it runs from plain files (Prisma's native engine cannot load from
 # asar) and electron-builder's extraResources drops node_modules directories.
 afterPack: desktop/scripts/after-pack.cjs
+# Electron fuses (flipped in the packaged Aharos.exe; verified by
+# `npm run desktop:verify`). The main process holds this install's AUTH_SECRET:
+# without these, anyone at the till could start Aharos.exe with
+# ELECTRON_RUN_AS_NODE=1, NODE_OPTIONS or --inspect and run code as the app.
+# Note: Playwright drives Electron through --inspect, so the full desktop E2E runs
+# on the unpacked build (same app code, stock Electron binary); the fused binary
+# gets the packaged smoke test in desktop/scripts/verify-package.mjs.
+electronFuses:
+  runAsNode: false
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  # Session cookies at rest are encrypted with the OS key store (DPAPI / macOS Keychain).
+  enableCookieEncryption: true
+  # Only app.asar is loaded, and its contents must match the hash embedded in the exe.
+  onlyLoadAppFromAsar: true
+  enableEmbeddedAsarIntegrityValidation: true
+  # grantFileProtocolExtraPrivileges stays at Electron's default (on): the splash
+  # and first-run setup pages are file:// pages inside app.asar, which cannot load
+  # with it off (verified: ERR_FILE_NOT_FOUND). Those pages may only reach their
+  # own files (request filter in main.ts), so the extra privileges are not usable.
+# Releases are never published from a build: there is no auto-updater yet
+# (docs/desktop-release.md). Code signing is applied only when CSC_LINK /
+# CSC_KEY_PASSWORD are provided (CI secrets) — never committed.
+publish: null
 win:
   executableName: Aharos
   icon: build/desktop/resources/icon.ico
@@ -32,10 +62,30 @@ nsis:
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: always
   createStartMenuShortcut: true
-  shortcutName: Aharos
+  shortcutName: RESTORA
   runAfterFinish: true
   # Restaurant data lives in %APPDATA%\Aharos and must survive uninstall/upgrade.
   deleteAppDataOnUninstall: false
-  artifactName: Aharos-Setup-${version}.${ext}
+  artifactName: RESTORA-Setup-${version}.${ext}
 portable:
-  artifactName: Aharos-Portable-${version}.${ext}
+  artifactName: RESTORA-Portable-${version}.${ext}
+# macOS. No `arch` list on purpose: electron-builder then targets the arch of the
+# Mac it runs on, which is the arch of the server payload's native modules
+# (Prisma engine, sharp). Apple Silicon and Intel DMGs are built on an arm64 and
+# an x64 Mac respectively (CI: .github/workflows/ci.yml, desktop-macos).
+# Signing / notarization only happen when CSC_LINK (Developer ID certificate) and
+# APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID are provided; otherwise the
+# app is ad-hoc signed and Gatekeeper will ask the user to confirm the first launch.
+mac:
+  category: public.app-category.business
+  icon: build/desktop/resources/icon.icns
+  target:
+    - target: dmg
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: desktop/mac/entitlements.mac.plist
+  entitlementsInherit: desktop/mac/entitlements.mac.plist
+  artifactName: RESTORA-${version}-mac-${arch}.${ext}
+dmg:
+  title: RESTORA ${version}
+  artifactName: RESTORA-${version}-mac-${arch}.${ext}

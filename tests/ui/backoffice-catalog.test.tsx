@@ -204,7 +204,7 @@ describe("menu items", () => {
     setValue(within(d).getByLabelText(/Price change/), "-100");
     await userEvent.click(within(d).getByRole("button", { name: "Add variant" }));
     await waitFor(() => expect(posts()).toHaveLength(1));
-    expect(posts()[0].body).toEqual({ name: "Half", priceDelta: -100 });
+    expect(posts()[0].body).toEqual({ name: "Half", priceDelta: -100, consumptionFactor: 1 });
 
     await userEvent.click(screen.getByRole("button", { name: /Attach group/ }));
     d = await dialog();

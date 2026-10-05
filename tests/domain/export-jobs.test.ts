@@ -10,7 +10,7 @@ import { buildAccessContext, systemContext } from "@/server/auth/context";
 import { type AccessContext, ForbiddenError, NotFoundError, ValidationError } from "@/server/db/scope";
 import { requestExport, processExportJob, getExportJob, downloadExport, LocalExportStorage, getBackgroundExportRunner, type ExportRunner } from "@/server/services/exportJobs";
 import { exportReportCSV } from "@/server/services/reports";
-import { createExpense } from "@/server/services/finance";
+import { createExpenseCategory, createExpense } from "@/server/services/finance";
 
 const RUN = Date.now().toString(36);
 let orgId: string, outletA: string, mgrAId: string, membershipId: string;
@@ -43,6 +43,8 @@ beforeAll(async () => {
   cashierA = (await user("casha", "CASHIER", outletA)).ctx;
   owner = (await user("owner", "OWNER", null)).ctx;
   org2 = systemContext((await prisma.organization.create({ data: { name: `Exp Org2 ${RUN}` } })).id, []);
+  // A category name that needs CSV quoting (categories are a managed list since Phase 4).
+  await createExpenseCategory(owner, { name: "MISC, \"odd\"" });
   for (const [category, amount] of [["GAS", 1200], ["RENT", 50000], ["MISC, \"odd\"", 75]] as const) {
     await createExpense(owner, { outletId: outletA, category, amount });
   }

@@ -2,15 +2,22 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; img-src 'self'">
-<title>Aharos</title>
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; img-src 'self' data:; font-src 'self'">
+<title>RESTORA</title>
 <link rel="stylesheet" href="desktop.css">
 </head>
 <body class="splash">
-  <img src="icon.png" alt="" width="72" height="72">
-  <h1>Aharos</h1>
-  <p class="tagline">Restaurant Operating System</p>
-  <div class="spinner" aria-hidden="true"></div>
-  <p id="status" role="status">Starting…</p>
+  <div class="sun" aria-hidden="true"></div>
+  <main>
+    <div class="brand">
+      <img src="icon.png" alt="" width="40" height="40">
+      <span class="wordmark">RESTORA</span>
+    </div>
+    <p class="tagline">The operating system <em>for restaurants.</em></p>
+    <div class="status-row">
+      <div class="progress" aria-hidden="true"></div>
+      <p id="status" role="status">Starting…</p>
+    </div>
+  </main>
 </body>
 </html>

@@ -31,7 +31,8 @@ const JAN_RANGE = { from: JAN(1, 0).toISOString(), to: JAN(31, 23).toISOString()
 
 async function pos(outletId: string, ref: string, placedAt: Date, items: Array<{ code: string; qty: number; price: number; tax?: number }>, discount = 0, phone?: string) {
   const sub = items.reduce((s, i) => s + i.qty * i.price, 0);
-  const tax = items.reduce((s, i) => s + (i.qty * i.price * (i.tax ?? 0)) / 100, 0);
+  // Tax after discount (GST is charged on the discounted value): the discount is shared by line value.
+  const tax = items.reduce((s, i) => s + ((i.qty * i.price - (discount * i.qty * i.price) / sub) * (i.tax ?? 0)) / 100, 0);
   const total = sub - discount + tax;
   const n: NormalizedOrder = {
     externalRef: `${ref}-${RUN}`, eventId: `ev-${ref}-${RUN}`, outletId, source: "PETPOOJA", channel: "DINE_IN", placedAt, discount,
@@ -53,7 +54,7 @@ beforeAll(async () => {
   await createMenuItem(ctx, { name: `Dosa ${RUN}`, price: 100, categoryId: cat.id, posCode: `DOSA-${RUN}`, taxPct: 5 });
   customerId = (await createCustomer(ctx, { name: "Meera, \"VIP\"", phone: "9000012345" })).id;
 
-  // Jan 10 10:00Z: 2 dosa @100, 5% tax, ₹20 discount -> sub 200, disc 20, tax 10, total 190
+  // Jan 10 10:00Z: 2 dosa @100, 5% tax, ₹20 discount -> sub 200, disc 20, taxable 180, tax 9, total 189
   await pos(outletA, "a1", JAN(10, 10), [{ code: `DOSA-${RUN}`, qty: 2, price: 100, tax: 5 }], 20, "9000012345");
   // Jan 10 20:00Z (= Jan 11 01:30 IST): 100
   await pos(outletA, "a2", JAN(10, 20), [{ code: "TEA", qty: 2, price: 50 }]);
@@ -89,14 +90,14 @@ describe("dailySales()", () => {
   it("aggregates PAID orders per outlet per day with exact money totals", async () => {
     const rows = await dailySales(prisma, ctx, { from: JAN(1, 0), to: JAN(31, 0), utcOffsetMinutes: 0 });
     const a10 = rows.find((r) => r.outletId === outletA && r.day === "2026-01-10")!;
-    expect(a10).toMatchObject({ orders: 2, grossSales: 300, discounts: 20, taxes: 10, total: 290, covers: 2 });
+    expect(a10).toMatchObject({ orders: 2, grossSales: 300, discounts: 20, taxes: 9, total: 289, covers: 2 });
     expect(rows.find((r) => r.outletId === outletA && r.day === "2026-01-11")).toMatchObject({ orders: 1, total: 150 });
     expect(rows.find((r) => r.outletId === outletB && r.day === "2026-01-10")).toMatchObject({ orders: 1, total: 300 });
   });
 
   it("moves orders across the day boundary with the offset", async () => {
     const ist = await dailySales(prisma, mgrA, { outletId: outletA, from: JAN(1, 0), to: JAN(31, 0), utcOffsetMinutes: 330 });
-    expect(ist.map((r) => [r.day, r.orders, r.total])).toEqual([["2026-01-10", 1, 190], ["2026-01-11", 2, 250]]);
+    expect(ist.map((r) => [r.day, r.orders, r.total])).toEqual([["2026-01-10", 1, 189], ["2026-01-11", 2, 250]]);
   });
 
   it("filters by date, excludes unpaid orders, and counts covers", async () => {
@@ -115,21 +116,26 @@ describe("dailySales()", () => {
 
 describe("report registry", () => {
   it("registers every required report", () => {
-    expect(REPORT_IDS.sort()).toEqual(["CATEGORY_SALES", "CUSTOMERS", "DAILY_SALES", "EXPENSES", "INVENTORY", "ITEM_SALES", "LOYALTY", "ORDERS", "PAYMENTS", "PNL", "PURCHASES", "REFUNDS", "STOCK_MOVEMENT", "VENDOR_DUES", "WASTAGE"]);
+    expect(REPORT_IDS.sort()).toEqual(["CATEGORY_SALES", "CUSTOMERS", "DAILY_SALES", "EXPENSES", "INVENTORY", "ITEM_SALES", "LOYALTY", "ORDERS", "PAYMENTS", "PNL", "PURCHASES", "REFUNDS", "STOCK_ADJUSTMENTS", "STOCK_COUNT_VARIANCE", "STOCK_MOVEMENT", "VENDOR_DUES", "WASTAGE",
+      // Phase 4 finance
+      "CASH_DRAWER", "DISCOUNTS", "FINANCE_AUDIT", "INVOICES", "OUTSTANDING_ORDERS", "SALES_VS_PAYMENTS", "TAX_SUMMARY", "VENDOR_AGING",
+      // Phase 5 analytics
+      "MATERIAL_CONSUMPTION", "MODIFIER_SALES", "OUTLET_COMPARISON", "PURCHASE_TREND", "SALES_TREND", "STOCK_AGEING", "VARIANT_SALES", "VENDOR_PURCHASING"].sort());
   });
 
   it("returns columns in order and rows keyed by column", async () => {
     const r = await getReport(prisma, mgrA, "DAILY_SALES", { outletId: outletA, ...JAN_RANGE, utcOffsetMinutes: 0 });
-    expect(r.columns.map((c) => c.key)).toEqual(["day", "outlet", "orders", "covers", "grossSales", "discounts", "taxes", "total"]);
-    expect(r.rows[0]).toEqual({ day: "2026-01-10", outlet: `RPA${RUN}`, orders: 2, covers: 2, grossSales: 300, discounts: 20, taxes: 10, total: 290 });
+    expect(r.columns.map((c) => c.key)).toEqual(["day", "outlet", "orders", "covers", "grossSales", "discounts", "taxes", "total", "refunds", "netSales"]);
+    expect(r.rows[0]).toEqual({ day: "2026-01-10", outlet: `RPA${RUN}`, orders: 2, covers: 2, grossSales: 300, discounts: 20, taxes: 9, total: 289, refunds: 0, netSales: 280 });
     expect(r).toMatchObject({ rowCount: 2, truncated: false, nextOffset: null });
   });
 
   it("sales reports: items and categories", async () => {
     const items = await getReport(prisma, mgrA, "ITEM_SALES", { outletId: outletA, ...JAN_RANGE });
-    expect(items.rows.find((i) => i.item === `Dosa ${RUN}`)).toMatchObject({ qty: 2, revenue: 200 });
+    // Net revenue carries the order discount exactly as the order was priced (Phase 4): 200 − 20.
+    expect(items.rows.find((i) => i.item === `Dosa ${RUN}`)).toMatchObject({ qty: 2, grossRevenue: 200, discount: 20, revenue: 180 });
     const cats = await getReport(prisma, mgrA, "CATEGORY_SALES", { outletId: outletA, ...JAN_RANGE });
-    expect(cats.rows.find((c) => c.category === `Tiffin ${RUN}`)).toMatchObject({ revenue: 200 });
+    expect(cats.rows.find((c) => c.category === `Tiffin ${RUN}`)).toMatchObject({ grossRevenue: 200, discount: 20, revenue: 180 });
     expect(cats.rows.find((c) => c.category === "Unmapped")).toMatchObject({ revenue: 250 });
   });
 
@@ -149,7 +155,7 @@ describe("report registry", () => {
     const dues = await getReport(prisma, mgrA, "VENDOR_DUES", { outletId: outletA, to: JAN(20, 0).toISOString() });
     expect(dues.rows[0]).toMatchObject({ vendor: `Batter Co ${RUN}`, due: 2400, overdue: 2400 });
     const pays = await getReport(prisma, mgrA, "PAYMENTS", { outletId: outletA, ...JAN_RANGE });
-    expect(pays.rows.map((p) => p.amount)).toEqual([190, 100, 150]);
+    expect(pays.rows.map((p) => p.amount)).toEqual([189, 100, 150]);
     expect((await getReport(prisma, mgrA, "PAYMENTS", { outletId: outletA, method: "CASH" })).rows.map((p) => p.amount)).toEqual([250]);
     const refunds = await getReport(prisma, mgrA, "REFUNDS", { outletId: outletA });
     expect(refunds.rows).toEqual([expect.objectContaining({ amount: 30, method: "UPI", reason: "Spilled, re-made" })]);
@@ -157,12 +163,12 @@ describe("report registry", () => {
     expect(exp.rows[0]).toMatchObject({ category: "GAS", amount: 1500 });
     const pnl = await getReport(prisma, mgrA, "PNL", { outletId: outletA, ...JAN_RANGE });
     const m = Object.fromEntries(pnl.rows.map((r) => [r.metric, r.value]));
-    expect(m).toMatchObject({ grossSales: 450, discounts: 20, netSales: 430, taxes: 10 });
+    expect(m).toMatchObject({ grossSales: 450, discounts: 20, netSales: 430, taxes: 9 });
   });
 
   it("customer and loyalty reports", async () => {
     const customers = await getReport(prisma, mgrA, "CUSTOMERS", { outletId: outletA });
-    expect(customers.rows.find((c) => c.phone === "9000012345")).toMatchObject({ orders: 1, spend: 190 });
+    expect(customers.rows.find((c) => c.phone === "9000012345")).toMatchObject({ orders: 1, spend: 189 });
     const loyalty = await getReport(prisma, mgrA, "LOYALTY", { outletId: outletA });
     expect(loyalty.rows.find((c) => c.phone === "9000012345")).toMatchObject({ balance: 1, earned: 1, redeemed: 0 });
     // Outlet B staff never see customers who only ordered at A.

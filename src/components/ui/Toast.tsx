@@ -20,9 +20,9 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   }, []);
   const api = useMemo(() => ({ show }), [show]);
   const tones: Record<Tone, string> = {
-    ok: "border-ok-100 bg-white text-ink-900 before:bg-ok-500",
-    bad: "border-bad-100 bg-white text-ink-900 before:bg-bad-500",
-    info: "border-brand-100 bg-white text-ink-900 before:bg-brand-500",
+    ok: "border-espresso-600 bg-espresso text-paper before:bg-ok-500",
+    bad: "border-espresso-600 bg-espresso text-paper before:bg-bad-500",
+    info: "border-espresso-600 bg-espresso text-paper before:bg-brand-500",
   };
   const icons: Record<Tone, "check" | "alert" | "bell"> = { ok: "check", bad: "alert", info: "bell" };
   return (
@@ -35,7 +35,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
             role={t.tone === "bad" ? "alert" : "status"}
             className={`pointer-events-auto relative flex animate-slide-up items-start gap-2.5 overflow-hidden rounded-lg border py-2.5 pl-4 pr-3 text-sm shadow-pop before:absolute before:inset-y-0 before:left-0 before:w-1 before:content-[''] ${tones[t.tone]}`}
           >
-            <Icon name={icons[t.tone]} className={`mt-0.5 h-4 w-4 shrink-0 ${t.tone === "ok" ? "text-ok-600" : t.tone === "bad" ? "text-bad-600" : "text-brand-600"}`} />
+            <Icon name={icons[t.tone]} className={`mt-0.5 h-4 w-4 shrink-0 ${t.tone === "ok" ? "text-ok-100" : t.tone === "bad" ? "text-bad-100" : "text-brand-200"}`} />
             <span className="leading-snug">{t.message}</span>
           </div>
         ))}

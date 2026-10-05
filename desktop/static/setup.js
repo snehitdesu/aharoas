@@ -84,6 +84,7 @@ form.addEventListener("submit", async (e) => {
   delete data.confirmPassword;
   const button = $("create");
   button.disabled = true;
+  button.setAttribute("aria-busy", "true");
   button.textContent = "Creating…";
   try {
     const res = await window.aharosSetup.submit(data);
@@ -106,6 +107,7 @@ form.addEventListener("submit", async (e) => {
     setError(String((err && err.message) || err));
   } finally {
     button.disabled = false;
+    button.removeAttribute("aria-busy");
     button.textContent = "Create restaurant";
   }
 });
@@ -115,6 +117,6 @@ $("finish").addEventListener("click", () => window.aharosSetup.finish());
 window.aharosSetup.defaults().then((d) => {
   form.elements.namedItem("timezone").value = d.timezone;
   form.elements.namedItem("currency").value = d.currency;
-  $("version").textContent = `Aharos ${d.version}`;
+  $("version").textContent = `RESTORA ${d.version}`;
 });
 showStep(0);

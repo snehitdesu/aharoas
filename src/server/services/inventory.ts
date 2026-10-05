@@ -14,6 +14,7 @@
 import { Prisma, type PrismaClient } from "@prisma/client";
 import { z } from "zod";
 import {
+  AdjustmentReason,
   InventoryTransactionType,
   InventorySourceType,
   INVENTORY_INFLOW_TYPES,
@@ -21,7 +22,8 @@ import {
 } from "@/constants/enums";
 import { prisma } from "@/server/db/client";
 import { runInTx } from "@/server/services/_workflow";
-import { type AccessContext, assertOutletAccess, ValidationError } from "@/server/db/scope";
+import { type AccessContext, assertOutletAccess, ConflictError, ValidationError } from "@/server/db/scope";
+import { idempotencyKeySchema } from "@/server/services/idempotency";
 import { assertOutletInOrg } from "@/server/db/outletGuard";
 import { assertCan, type Permission } from "@/server/auth/rbac";
 import { writeAudit } from "@/server/audit/log";
@@ -147,6 +149,53 @@ async function updateWeightedAverageCost(
     },
     update: { avgCost: money(newAvg), lastCost: money(inflowRate) },
   });
+}
+
+// ------------------------------------------------------------
+// Units: every ledger quantity is in the material's BASE unit.
+// ------------------------------------------------------------
+
+/**
+ * How many base units one `unitId` is for this material (material-specific
+ * conversion first, then the organization-wide one). No unit / the base unit
+ * -> 1. A unit without a conversion to the base unit is incompatible and
+ * rejected: a transaction unit is never silently treated as the base unit.
+ */
+export async function resolveUnit(db: Client, ctx: AccessContext, materialId: string, unitId?: string | null): Promise<{ factor: Prisma.Decimal; baseUnitId: string }> {
+  const material = await db.material.findUnique({ where: { id: materialId }, select: { organizationId: true, baseUnitId: true } });
+  if (!material || material.organizationId !== ctx.organizationId) throw new ValidationError(`Material ${materialId} not found`);
+  if (!unitId || unitId === material.baseUnitId) return { factor: D(1), baseUnitId: material.baseUnitId };
+  const conv =
+    (await db.unitConversion.findFirst({ where: { organizationId: ctx.organizationId, fromUnitId: unitId, toUnitId: material.baseUnitId, materialId } })) ??
+    (await db.unitConversion.findFirst({ where: { organizationId: ctx.organizationId, fromUnitId: unitId, toUnitId: material.baseUnitId, materialId: null } }));
+  if (!conv || D(conv.factor).lte(0)) throw new ValidationError(`Unit ${unitId} cannot be converted to the base unit of material ${materialId}`);
+  return { factor: D(conv.factor), baseUnitId: material.baseUnitId };
+}
+
+/**
+ * A quantity (and optional per-unit rate) in a transaction unit, expressed in
+ * the base unit: qty × factor, rate ÷ factor (so qty × rate — the value — is
+ * unchanged and the weighted-average cost stays per base unit).
+ */
+export async function toBaseUnits(db: Client, ctx: AccessContext, materialId: string, quantity: Prisma.Decimal | number | string, unitId?: string | null, rate?: Prisma.Decimal | number | string) {
+  const { factor, baseUnitId } = await resolveUnit(db, ctx, materialId, unitId);
+  return { qty: roundQty(D(quantity).times(factor)), rate: rate === undefined ? undefined : D(rate).div(factor), baseUnitId, factor };
+}
+
+/**
+ * Refuse an outflow larger than the stock on hand (issues, transfers, manual
+ * reductions, wastage). Runs inside the caller's SERIALIZABLE transaction, so
+ * two concurrent outflows cannot both pass on the same stock. Sales are the
+ * exception: a sale is never blocked by book stock (negativeStock() surfaces it).
+ */
+export async function assertAvailable(tx: Tx, ctx: AccessContext, outletId: string, required: Map<string, Prisma.Decimal>) {
+  for (const [materialId, need] of required) {
+    const onHand = await currentQuantity(tx, ctx, outletId, materialId);
+    if (onHand.lt(need)) {
+      const m = await tx.material.findUnique({ where: { id: materialId }, select: { name: true } });
+      throw new ValidationError(`Insufficient stock of ${m?.name ?? materialId}: ${roundQty(need).toString()} needed, ${roundQty(onHand).toString()} on hand`);
+    }
+  }
 }
 
 /** Get the current weighted-average cost of a material at an outlet. */
@@ -446,12 +495,13 @@ export function recordReturn(ctx: AccessContext, input: ReturnInput, db: Client 
   });
 }
 
-/** Post an opening balance (used by seeding / outlet setup). */
+/** Post an opening balance (low-level; seeding and recordOpeningStock). */
 export function recordOpeningBalance(
   ctx: AccessContext,
   input: { outletId: string; materialId: string; quantity: number | string; rate: number | string; unitId?: string; sourceRef?: string },
   db: Client = prisma
 ) {
+  requirePermission(ctx, "inventory.adjust", input.outletId);
   positiveQty.parse(input.quantity);
   return runInTx(db, (tx) =>
     appendLedger(tx, ctx, { ...input, magnitude: input.quantity, txnType: "OPENING_BALANCE", sourceType: "MANUAL" })
@@ -487,6 +537,115 @@ export function recordCorrection(ctx: AccessContext, ledgerId: string, note: str
     });
     await writeAudit(tx, ctx, { action: "STOCK_ADJUSTMENT", entityType: "InventoryLedger", entityId: row.id, outletId: orig.outletId, before: { original: orig.id }, after: { correction: row.id } });
     return row;
+  });
+}
+
+// ------------------------------------------------------------
+// Opening stock (outlet go-live)
+// ------------------------------------------------------------
+
+const openingSchema = z.object({
+  outletId: z.string().min(1),
+  note: z.string().trim().max(500).optional(),
+  lines: z
+    .array(z.object({ materialId: z.string().min(1), qty: z.number().positive().max(1_000_000_000), rate: z.number().nonnegative().max(100_000_000), unitId: z.string().optional() }).strict())
+    .min(1)
+    .max(500),
+}).strict();
+
+/**
+ * Opening stock for an outlet: one OPENING_BALANCE row per material, only for
+ * a material with NO movement at the outlet yet (later corrections go through
+ * an adjustment or a stock count). The ledger sourceRef `opening:<outlet>:<material>`
+ * makes it at most once per material, even under concurrency; an exact retry is
+ * a no-op, a different quantity/rate for an already-opened material is refused.
+ * Quantity and rate may be given in a purchase unit; they are posted in the base unit.
+ */
+export async function recordOpeningStock(ctx: AccessContext, input: z.input<typeof openingSchema>, db: Client = prisma) {
+  const data = openingSchema.parse(input);
+  requirePermission(ctx, "inventory.adjust", data.outletId);
+  const ids = data.lines.map((l) => l.materialId);
+  if (new Set(ids).size !== ids.length) throw new ValidationError("Each material may appear only once in an opening-stock entry");
+  return runInTx(db, async (tx) => {
+    await assertOutletInOrg(tx, ctx, data.outletId);
+    const posted: Array<{ materialId: string; qty: string; rate: string; replayed: boolean }> = [];
+    for (const l of data.lines) {
+      const base = await toBaseUnits(tx, ctx, l.materialId, l.qty, l.unitId, l.rate);
+      const sourceRef = `opening:${data.outletId}:${l.materialId}`;
+      const prior = await tx.inventoryLedger.findUnique({ where: { sourceRef } });
+      if (prior) {
+        if (!D(prior.qty).eq(base.qty) || !money(prior.rate).eq(money(base.rate!))) throw new ValidationError(`Opening stock for material ${l.materialId} was already posted with different values; use a stock adjustment`);
+        posted.push({ materialId: l.materialId, qty: prior.qty.toString(), rate: prior.rate.toString(), replayed: true });
+        continue;
+      }
+      const moved = await tx.inventoryLedger.count({ where: { organizationId: ctx.organizationId, outletId: data.outletId, materialId: l.materialId } });
+      if (moved > 0) throw new ValidationError(`Material ${l.materialId} already has stock movements at this outlet; use a stock adjustment or a stock count`);
+      const row = await appendLedger(tx, ctx, {
+        outletId: data.outletId, materialId: l.materialId, unitId: base.baseUnitId, magnitude: base.qty, rate: base.rate,
+        txnType: "OPENING_BALANCE", sourceType: "MANUAL", sourceRef, note: data.note ?? "Opening stock",
+      });
+      posted.push({ materialId: l.materialId, qty: row.qty.toString(), rate: row.rate.toString(), replayed: false });
+    }
+    const fresh = posted.filter((p) => !p.replayed);
+    if (fresh.length) await writeAudit(tx, ctx, { action: "STOCK_ADJUSTMENT", entityType: "OpeningStock", entityId: data.outletId, outletId: data.outletId, after: { lines: fresh, note: data.note } });
+    return { lines: posted };
+  });
+}
+
+// ------------------------------------------------------------
+// Manual stock adjustment (with reason + approval rule)
+// ------------------------------------------------------------
+
+/** Adjustments whose value (qty × avg cost) exceeds this need inventory.approve_adjustment. */
+export const ADJUSTMENT_RULES = { approvalThreshold: 2000 };
+
+const adjustSchema = z.object({
+  outletId: z.string().min(1),
+  materialId: z.string().min(1),
+  /** Signed: + adds stock, − removes it. In `unitId` (default: the base unit). */
+  qty: z.number().refine((v) => v !== 0, "Quantity must not be zero").refine((v) => Math.abs(v) <= 1_000_000_000, "Quantity is too large"),
+  unitId: z.string().optional(),
+  reason: AdjustmentReason.zod,
+  note: z.string().trim().min(3, "Explain the adjustment").max(500),
+}).strict();
+
+/**
+ * Manual stock adjustment: an OTHER_ADJUSTMENT ledger row at the current
+ * weighted-average cost (so it never moves the average), with a mandatory
+ * reason and note. A reduction cannot exceed stock on hand. Above the value
+ * threshold the actor also needs inventory.approve_adjustment. An
+ * Idempotency-Key is REQUIRED (it becomes the row's unique sourceRef): a retry
+ * returns the original row, a different request under the same key is a 409.
+ */
+export async function adjustStock(ctx: AccessContext, input: z.input<typeof adjustSchema>, idempotencyKey: string | undefined, db: Client = prisma) {
+  const data = adjustSchema.parse(input);
+  if (!idempotencyKey) throw new ValidationError("An Idempotency-Key is required for stock adjustments");
+  const key = idempotencyKeySchema.parse(idempotencyKey);
+  requirePermission(ctx, "inventory.adjust", data.outletId);
+  const sourceRef = `adjust:${ctx.organizationId}:${key}`;
+  return runInTx(db, async (tx) => {
+    await assertOutletInOrg(tx, ctx, data.outletId);
+    const base = await toBaseUnits(tx, ctx, data.materialId, Math.abs(data.qty), data.unitId);
+    const signed = data.qty > 0 ? base.qty : base.qty.neg();
+    const prior = await tx.inventoryLedger.findUnique({ where: { sourceRef } });
+    if (prior) {
+      if (prior.outletId !== data.outletId || prior.materialId !== data.materialId || !D(prior.qty).eq(signed)) throw new ConflictError("Idempotency key was already used for a different adjustment");
+      return { row: prior, replayed: true };
+    }
+    const before = await currentQuantity(tx, ctx, data.outletId, data.materialId);
+    if (signed.lt(0)) await assertAvailable(tx, ctx, data.outletId, new Map([[data.materialId, base.qty]]));
+    const rate = await getAvgCost(tx, ctx, data.outletId, data.materialId);
+    const value = money(dMul(base.qty, rate));
+    if (value.gt(ADJUSTMENT_RULES.approvalThreshold)) assertCan(ctx, "inventory.approve_adjustment", data.outletId);
+    const row = await appendLedger(tx, ctx, {
+      outletId: data.outletId, materialId: data.materialId, unitId: base.baseUnitId, magnitude: base.qty, direction: signed.gt(0) ? "IN" : "OUT", rate,
+      txnType: "OTHER_ADJUSTMENT", sourceType: "MANUAL", sourceRef, note: `${data.reason}: ${data.note}`,
+    });
+    await writeAudit(tx, ctx, {
+      action: "STOCK_ADJUSTMENT", entityType: "InventoryLedger", entityId: row.id, outletId: data.outletId,
+      before: { onHand: before.toString() }, after: { onHand: before.plus(signed).toString(), qty: signed.toString(), value: value.toString(), reason: data.reason, note: data.note },
+    });
+    return { row, replayed: false };
   });
 }
 

@@ -8,6 +8,9 @@
  *
  * - Auth: the session cookie is validated through the same path as everywhere
  *   else (resolveFromToken -> DB-built AccessContext).
+ * - Idle timeout: a request flagged as a background poll (x-aharos-background)
+ *   is authenticated but does not count as user activity.
+ * - Step-up: routes marked `reauth` need a fresh, scoped password confirmation.
  * - CSRF defence-in-depth: state-changing requests with a cross-origin Origin
  *   header are rejected (the cookie is also SameSite=Lax).
  * - Errors are mapped by `fail` (typed domain errors -> status; Zod -> 422;
@@ -15,16 +18,26 @@
  */
 import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
-import { SESSION_COOKIE } from "@/constants/auth";
+import { BACKGROUND_HEADER, SESSION_COOKIE, type ReauthScope } from "@/constants/auth";
 import { resolveFromToken, type CurrentUser } from "@/server/auth/current-user";
+import { requireFreshAuth } from "@/server/auth/reauth";
+import { prisma } from "@/server/db/client";
 import { type AccessContext, ForbiddenError, NotFoundError, UnauthorizedError, ValidationError } from "@/server/db/scope";
 import { ok, fail } from "@/server/api/respond";
-import { enforceRateLimit, type RatePolicy } from "@/server/api/rateLimit";
+import { clientIp, enforceRateLimit, type RatePolicy } from "@/server/api/rateLimit";
 import { applyTimingHeaders, logSlowRequest, newRequestId } from "@/server/observability/timing";
+import { withRequestContext, currentRequestContext } from "@/server/observability/log";
+import { inc } from "@/server/observability/metrics";
+import { recordServerError } from "@/server/observability/alerts";
+import { beginRequest } from "@/server/ops/lifecycle";
 
 type Method = "GET" | "POST" | "PATCH" | "DELETE";
 export type HandlerArgs = { ctx: AccessContext; user: CurrentUser; params: Record<string, string>; query: Record<string, string>; body: unknown; req: NextRequest };
-export type Route = { method: Method; path: string; handler: (a: HandlerArgs) => Promise<unknown>; rateLimit?: RatePolicy };
+/**
+ * `reauth`: the route is a sensitive action and needs a fresh password
+ * confirmation for that scope on the calling session (see server/auth/reauth.ts).
+ */
+export type Route = { method: Method; path: string; handler: (a: HandlerArgs) => Promise<unknown>; rateLimit?: RatePolicy; reauth?: ReauthScope };
 
 const MAX_BODY = 1_000_000;
 
@@ -64,14 +77,51 @@ export function assertSameOrigin(req: NextRequest) {
   }
 }
 
+/** Could some concrete path match both patterns? (Same length; each segment equal or a parameter.) */
+function overlaps(a: string[], b: string[]): boolean {
+  return a.length === b.length && a.every((s, i) => s === b[i] || s.startsWith(":") || b[i].startsWith(":"));
+}
+
+/**
+ * Dispatch takes the FIRST route matching method + path, so a duplicate (or a
+ * parameterised pattern placed earlier) would silently shadow a later route —
+ * e.g. an unprotected copy of an endpoint that is meant to require step-up
+ * re-authentication. Refuse such tables at module load: identical method+path
+ * pairs, and overlapping same-method patterns whose protection differs.
+ */
+export function assertUnambiguousRoutes(routes: Array<Pick<Route, "method" | "path" | "reauth" | "rateLimit">>): void {
+  const segs = routes.map((r) => r.path.split("/").filter(Boolean));
+  for (let i = 0; i < routes.length; i++) {
+    for (let j = i + 1; j < routes.length; j++) {
+      const a = routes[i], b = routes[j];
+      if (a.method !== b.method || !overlaps(segs[i], segs[j])) continue;
+      const same = segs[i].join("/") === segs[j].join("/");
+      if (same || a.reauth !== b.reauth || a.rateLimit !== b.rateLimit) {
+        throw new Error(`Ambiguous API routes: ${a.method} "${a.path}" and ${b.method} "${b.path}" can match the same request${same ? "" : " with different protection"}`);
+      }
+    }
+  }
+}
+
 export function createRouter(routes: Route[]) {
+  assertUnambiguousRoutes(routes);
   const compiled = routes.map((r) => ({ ...r, segs: r.path.split("/").filter(Boolean) }));
-  const dispatch = (method: Method) => async (req: NextRequest, context: { params: Promise<{ path?: string[] }> }) => {
-    const started = performance.now();
+  const dispatch = (method: Method) => (req: NextRequest, context: { params: Promise<{ path?: string[] }> }) => {
     const requestId = newRequestId(req.headers.get("x-request-id"));
+    return withRequestContext({ requestId, method, path: req.nextUrl.pathname }, () => handle(method, req, context, requestId));
+  };
+  const handle = async (method: Method, req: NextRequest, context: { params: Promise<{ path?: string[] }> }, requestId: string) => {
+    const started = performance.now();
     const path = req.nextUrl.pathname;
     let userId: string | undefined;
     let status = 500;
+    // Graceful shutdown: once draining, new requests are refused (the load balancer retries elsewhere).
+    const release = beginRequest();
+    if (!release) {
+      const res = NextResponse.json({ ok: false, error: { code: "ServiceUnavailable", message: "Server is restarting, please retry" } }, { status: 503, headers: { "Retry-After": "5" } });
+      applyTimingHeaders(res.headers, requestId, performance.now() - started);
+      return res;
+    }
     try {
       const segs = (await context.params).path ?? [];
       const candidates = compiled.map((r) => ({ r, params: match(segs, r.segs) })).filter((c) => c.params);
@@ -84,9 +134,12 @@ export function createRouter(routes: Route[]) {
         return res;
       }
 
-      const current = await resolveFromToken(req.cookies.get(SESSION_COOKIE)?.value);
+      const background = req.headers.get(BACKGROUND_HEADER) === "1";
+      const current = await resolveFromToken(req.cookies.get(SESSION_COOKIE)?.value, { activity: !background });
       if (!current) throw new UnauthorizedError();
       userId = current.user.id;
+      const rc = currentRequestContext();
+      if (rc) rc.userId = userId;
       if (hit.r.rateLimit) await enforceRateLimit(hit.r.rateLimit, current.user.id);
 
       let body: unknown = undefined;
@@ -106,6 +159,11 @@ export function createRouter(routes: Route[]) {
             throw new ValidationError("Request body must be valid JSON");
           }
         }
+      }
+      // Step-up gate last, immediately before the handler: a request rejected for
+      // origin/size/JSON never records a REAUTH_USED for an action that did not run.
+      if (hit.r.reauth) {
+        await requireFreshAuth(prisma, { session: current.session, organizationId: current.user.organizationId }, hit.r.reauth, { method, path, ip: clientIp(req), userAgent: req.headers.get("user-agent") ?? undefined });
       }
       const query = Object.fromEntries(req.nextUrl.searchParams.entries());
       const result = await hit.r.handler({ ctx: current.ctx, user: current.user, params: hit.params!, query, body: body ?? {}, req });
@@ -128,6 +186,13 @@ export function createRouter(routes: Route[]) {
       applyTimingHeaders(res.headers, requestId, durationMs);
       logSlowRequest({ requestId, method, path, status, durationMs, userId });
       return res;
+    } finally {
+      release();
+      inc("restora_http_requests_total", { class: `${Math.floor(status / 100)}xx` });
+      if (status >= 500) {
+        inc("restora_http_5xx_total");
+        recordServerError();
+      }
     }
   };
   return { GET: dispatch("GET"), POST: dispatch("POST"), PATCH: dispatch("PATCH"), DELETE: dispatch("DELETE") };

@@ -6,27 +6,39 @@
  * the unchanged Next.js server, which the app window talks to over loopback HTTP.
  * See docs/desktop-architecture.md.
  */
-import { app, BrowserWindow, Menu, dialog, ipcMain, safeStorage, session, shell, type IpcMainInvokeEvent, type MenuItemConstructorOptions } from "electron";
+import { app, BrowserWindow, Menu, dialog, ipcMain, safeStorage, session, shell, type IpcMainEvent, type IpcMainInvokeEvent, type MenuItemConstructorOptions } from "electron";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { SESSION_COOKIE } from "@/constants/auth";
-import { dataPaths, ensureDirs, loadOrCreateConfig, readSecret, saveConfig, type DataPaths, type DesktopConfig, type SecretCodec } from "./config";
+import { dataPaths, ensureDirs, loadOrCreateConfig, prismaEngineFile, readSecret, saveConfig, type DataPaths, type DesktopConfig, type SecretCodec } from "./config";
 import { createLogger, type Logger } from "./log";
-import { appOrigin, childEnv, isAllowedRendererRequest, isAppUrl, validatePrinterName, validateSetupInput } from "./policy";
+import { appOrigin, childEnv, hasDebugSwitch, isAllowedRendererRequest, isAppUrl, parseReauthReply, restoreAuthorizationFrom, validatePrinterName, validateSetupInput, type ReauthOutcome, type RestoreAuthorization } from "./policy";
 import { AharosServer, anyFreePort, DbTool, DbToolError, portFree } from "./processes";
 import { listPrinters, MockPrinterDriver, SystemPrinterDriver, testPage, type PrinterDriver } from "./hardware";
 import { sqliteUrl } from "../runtime/backup";
+import { swapInDatabase } from "../runtime/restore";
 
 const T0 = Date.now();
 const AUTO_BACKUP_INTERVAL_MS = 12 * 60 * 60 * 1000;
 
 // ---------------- process-level setup (before ready) ----------------
 
+// The installed app never runs with a debugger attached. Node's --inspect /
+// NODE_OPTIONS / ELECTRON_RUN_AS_NODE are disabled by Electron fuses
+// (electron-builder.yml); Chromium's remote-debugging switches cannot be fused
+// off and would hand the signed-in renderer (session cookie) to any local
+// process, so a packaged build refuses to start with them.
+if (app.isPackaged && hasDebugSwitch(process.argv)) {
+  console.error("Aharos refuses to start with debugging switches");
+  app.exit(1);
+}
+
 // Tests and multi-install setups may point the app at another data directory.
 const dataRoot = process.env.AHAROS_DATA_DIR ? path.resolve(process.env.AHAROS_DATA_DIR) : path.join(app.getPath("appData"), "Aharos");
 app.setPath("userData", dataRoot);
-app.setAppUserModelId("com.aharos.desktop");
+if (process.platform === "win32") app.setAppUserModelId("com.aharos.desktop"); // taskbar grouping / notifications (Windows only)
 app.enableSandbox(); // every renderer is sandboxed, whatever its webPreferences say
 // The server listens on 127.0.0.1 only. Without this, Chromium tries [::1] first for
 // "localhost", where another local process could listen and receive the app's traffic.
@@ -35,6 +47,14 @@ app.commandLine.appendSwitch("host-resolver-rules", "MAP localhost 127.0.0.1");
 const serverDir = app.isPackaged ? path.join(process.resourcesPath, "server") : path.join(__dirname, "..", "server");
 const staticDir = path.join(__dirname, "static");
 const iconPath = path.join(staticDir, "icon.png");
+const isMac = process.platform === "darwin";
+
+/** Prisma's native query engine inside the server payload, if this platform has a known file name. */
+function prismaEngineEnv(): Record<string, string> {
+  const name = prismaEngineFile(process.platform, process.arch);
+  const engine = name ? path.join(serverDir, "node_modules", ".prisma", "client", name) : "";
+  return engine && fs.existsSync(engine) ? { PRISMA_QUERY_ENGINE_LIBRARY: engine } : {};
+}
 
 let paths: DataPaths;
 let log: Logger;
@@ -57,7 +77,7 @@ if (!app.requestSingleInstanceLock()) {
       w.focus();
     }
   });
-  app.whenReady().then(boot).catch((e) => fatal("Aharos could not start", e));
+  app.whenReady().then(boot).catch((e) => fatal("RESTORA could not start", e));
 }
 
 // ---------------- security: every webContents ----------------
@@ -89,6 +109,10 @@ function installSecurity() {
     };
     contents.on("will-navigate", guard);
     contents.on("will-redirect", guard);
+    // A page that cannot load leaves a blank window: make it visible in the logs.
+    contents.on("did-fail-load", (_e, code, description, url, isMainFrame) => {
+      if (isMainFrame && code !== -3) log?.error(`Page failed to load: ${url.slice(0, 200)} (${description})`); // -3 = aborted by a newer navigation
+    });
   });
 }
 
@@ -114,8 +138,8 @@ function fromApp(e: IpcMainInvokeEvent) {
 
 function createSplash() {
   splash = new BrowserWindow({
-    width: 420, height: 300, frame: false, resizable: false, show: false, center: true,
-    backgroundColor: "#0f2a31", title: "Aharos", icon: iconPath,
+    width: 460, height: 300, frame: false, resizable: false, show: false, center: true,
+    backgroundColor: "#24180f", title: "RESTORA", icon: iconPath,
     webPreferences: secureWebPreferences(),
   });
   splash.once("ready-to-show", () => splash?.show());
@@ -137,8 +161,8 @@ function runSetupWizard(tool: DbTool): Promise<void> {
   return new Promise((resolve, reject) => {
     const setupUrl = staticUrl("setup.html");
     const win = new BrowserWindow({
-      width: 760, height: 720, minWidth: 640, minHeight: 600, show: false, center: true,
-      title: "Set up Aharos", icon: iconPath, backgroundColor: "#f4f7f8", autoHideMenuBar: true,
+      width: 980, height: 740, minWidth: 640, minHeight: 600, show: false, center: true,
+      title: "Set up RESTORA", icon: iconPath, backgroundColor: "#f6f0e4", autoHideMenuBar: true,
       webPreferences: secureWebPreferences(path.join(__dirname, "preload-setup.js")),
     });
     win.setMenu(null);
@@ -203,7 +227,7 @@ function createMainWindow() {
   mainWindow = new BrowserWindow({
     width: b?.width ?? 1366, height: b?.height ?? 820, x: b?.x, y: b?.y,
     minWidth: 1024, minHeight: 700, show: false,
-    title: "Aharos", icon: iconPath, backgroundColor: "#f4f7f8", autoHideMenuBar: true,
+    title: "RESTORA", icon: iconPath, backgroundColor: "#f6f0e4", autoHideMenuBar: true,
     webPreferences: secureWebPreferences(path.join(__dirname, "preload-app.js")),
   });
   const win = mainWindow;
@@ -238,7 +262,9 @@ async function boot() {
   paths = dataPaths(app.getPath("userData"));
   ensureDirs(paths);
   log = createLogger(paths.logs, !app.isPackaged);
-  log.info(`Aharos ${app.getVersion()} starting (packaged=${app.isPackaged}, electron=${process.versions.electron})`);
+  log.info(`Aharos ${app.getVersion()} starting (packaged=${app.isPackaged}, electron=${process.versions.electron}, ${process.platform}-${process.arch})`);
+  // A packaged macOS app takes its Dock icon from the bundle (icon.icns); the unpacked dev build would show Electron's.
+  if (isMac && !app.isPackaged) app.dock?.setIcon(iconPath);
   installSecurity();
   buildMenu();
   createSplash();
@@ -259,12 +285,11 @@ async function boot() {
   }
   origin = appOrigin(config.port);
 
-  const engine = path.join(serverDir, "node_modules", ".prisma", "client", "query_engine-windows.dll.node");
   const serverEnv = childEnv(process.env, {
     NODE_ENV: "production",
     NEXT_TELEMETRY_DISABLED: "1",
     DATABASE_URL: sqliteUrl(paths.dbFile),
-    ...(fs.existsSync(engine) ? { PRISMA_QUERY_ENGINE_LIBRARY: engine } : {}),
+    ...prismaEngineEnv(),
     AUTH_SECRET: authSecret, EXPORT_DIR: paths.exports, RATE_LIMIT_STORE: "memory", AHAROS_DESKTOP: "1" });
 
   setSplashStatus("Checking restaurant database…");
@@ -281,7 +306,7 @@ async function boot() {
       mark("setupDone");
     }
 
-    setSplashStatus("Starting Aharos…");
+    setSplashStatus("Starting RESTORA…");
     server = new AharosServer(serverDir, serverEnv, config.port, log, onServerCrash);
     const ms = await server.start();
     mark("serverReady");
@@ -321,7 +346,7 @@ function onServerCrash(restarted: boolean) {
     mainWindow?.webContents.reload();
     return;
   }
-  dialog.showErrorBox("Aharos stopped working", `The Aharos engine stopped repeatedly and could not be restarted.\n\nYour data is safe in:\n${paths.dataDir}\n\nLogs: ${paths.logs}`);
+  dialog.showErrorBox("RESTORA stopped working", `The RESTORA engine stopped repeatedly and could not be restarted.\n\nYour data is safe in:\n${paths.dataDir}\n\nLogs: ${paths.logs}`);
   app.exit(1);
 }
 
@@ -336,11 +361,10 @@ function fatal(title: string, e: unknown) {
 // ---------------- backup / restore (main process only) ----------------
 
 function toolEnv(): Record<string, string> {
-  const engine = path.join(serverDir, "node_modules", ".prisma", "client", "query_engine-windows.dll.node");
   return childEnv(process.env, {
     NODE_ENV: "production",
     DATABASE_URL: sqliteUrl(paths.dbFile),
-    ...(fs.existsSync(engine) ? { PRISMA_QUERY_ENGINE_LIBRARY: engine } : {}),
+    ...prismaEngineEnv(),
     AHAROS_DB_FILE: paths.dbFile,
     AHAROS_MIGRATIONS_DIR: path.join(serverDir, "migrations"),
     AHAROS_APP_VERSION: app.getVersion(),
@@ -357,6 +381,11 @@ async function withTool<T>(fn: (tool: DbTool) => Promise<T>): Promise<T> {
 }
 
 async function backupNow() {
+  // The menu exists from the first instant (on macOS it is always visible): no backup while the database is still being prepared.
+  if (!server) {
+    await dialog.showMessageBox({ type: "info", title: "RESTORA is starting", message: "Backups are available once RESTORA has finished starting." });
+    return;
+  }
   try {
     const r = await withTool((t) => t.call<{ manifest: { file: string; sizeBytes: number } }>("backup", { reason: "manual", backupDir: paths.backups }));
     log.info(`Manual backup ${r.manifest.file} verified`);
@@ -379,13 +408,68 @@ async function signedInOwner(): Promise<string | null> {
   return a && (a.isSuperAdmin || (a.isOrgWide && a.roles?.includes("OWNER"))) ? body.data?.user?.email ?? "owner" : null;
 }
 
+/** Ask the app window to show its password confirmation dialog for `scope`. Times out as "cancelled". */
+function askRendererToReauth(scope: string, timeoutMs = 5 * 60_000): Promise<ReauthOutcome> {
+  const win = mainWindow;
+  if (!win || win.isDestroyed()) return Promise.resolve("cancelled");
+  const id = randomUUID();
+  return new Promise((resolve) => {
+    const done = (o: ReauthOutcome) => {
+      clearTimeout(timer);
+      ipcMain.removeListener("aharos:reauthResult", onReply);
+      resolve(o);
+    };
+    const onReply = (e: IpcMainEvent, raw: unknown) => {
+      if (e.sender !== win.webContents || !isAppUrl(e.senderFrame?.url ?? "", origin)) return;
+      const outcome = parseReauthReply(raw, id);
+      if (outcome) done(outcome);
+    };
+    const timer = setTimeout(() => done("cancelled"), timeoutMs);
+    ipcMain.on("aharos:reauthResult", onReply);
+    win.show();
+    win.focus();
+    win.webContents.send("aharos:reauthRequest", { id, scope });
+  });
+}
+
+/**
+ * Server-side proof that the signed-in Owner has just re-entered their password
+ * (fresh `backup.restore` grant on this terminal's session). The renderer only
+ * shows the dialog; the decision is always the server's answer.
+ */
+async function authorizeRestore(): Promise<RestoreAuthorization | "cancelled"> {
+  const call = async (): Promise<RestoreAuthorization> => {
+    if (!origin || !server) return "error";
+    const [cookie] = await session.defaultSession.cookies.get({ url: origin, name: SESSION_COOKIE });
+    if (!cookie?.value) return "session_ended";
+    const res = await fetch(`${server.origin}/api/system/restore-authorization`, { method: "POST", headers: { cookie: `${SESSION_COOKIE}=${cookie.value}` } }).catch(() => null);
+    if (!res) return "error";
+    return restoreAuthorizationFrom(res.status, await res.json().catch(() => null));
+  };
+  const first = await call();
+  if (first !== "reauth_required") return first;
+  const outcome = await askRendererToReauth("backup.restore");
+  if (outcome === "session_ended") return "session_ended";
+  if (outcome !== "granted") return "cancelled";
+  return call(); // exactly one retry
+}
+
 async function restoreFromBackup() {
   const owner = await signedInOwner();
   if (!owner) {
-    await dialog.showMessageBox({ type: "warning", title: "Owner sign-in required", message: "Only the restaurant Owner can restore a backup.", detail: "Sign in to Aharos as the Owner on this computer, then choose Restore again." });
+    await dialog.showMessageBox({ type: "warning", title: "Owner sign-in required", message: "Only the restaurant Owner can restore a backup.", detail: "Sign in to RESTORA as the Owner on this computer, then choose Restore again." });
     return;
   }
-  const opts = { title: "Choose an Aharos backup", defaultPath: paths.backups, filters: [{ name: "Aharos backup", extensions: ["db"] }], properties: ["openFile"] as const };
+  const auth = await authorizeRestore();
+  if (auth !== "authorized") {
+    if (auth !== "cancelled") {
+      const detail = auth === "session_ended" ? "Your session has ended. Sign in again as the Owner, then choose Restore again." : auth === "forbidden" ? "Only the restaurant Owner can restore a backup." : "The password could not be confirmed. Nothing was changed.";
+      await dialog.showMessageBox({ type: "warning", title: "Password confirmation required", message: "Restore needs the Owner to confirm their password.", detail });
+    }
+    log.info(`Restore not authorized: ${auth}`);
+    return;
+  }
+  const opts = { title: "Choose a RESTORA backup", defaultPath: paths.backups, filters: [{ name: "RESTORA backup", extensions: ["db"] }], properties: ["openFile"] as const };
   const pick = mainWindow ? await dialog.showOpenDialog(mainWindow, { ...opts, properties: [...opts.properties] }) : await dialog.showOpenDialog({ ...opts, properties: [...opts.properties] });
   const file = pick.filePaths[0];
   if (pick.canceled || !file) return;
@@ -406,19 +490,18 @@ async function restoreFromBackup() {
       const pre = await withTool((t) => t.call<{ manifest: { file: string } }>("backup", { reason: "pre-restore", backupDir: paths.backups }));
       preFile = pre.manifest.file;
       log.info(`Restore by ${owner}: pre-restore backup ${preFile}; restoring ${path.basename(file)}`);
-      // Verify the exact bytes that will be swapped in (the chosen file could change after the first check).
-      const tmp = `${paths.dbFile}.restore-tmp`;
-      fs.copyFileSync(file, tmp);
-      const copy = await withTool((t) => t.call<{ ok: boolean; error?: string }>("verify", { file: tmp }));
-      if (!copy.ok) {
-        fs.rmSync(tmp, { force: true });
-        throw new Error(`The copied backup failed verification: ${copy.error}`);
-      }
-      for (const s of ["-wal", "-shm", "-journal"]) fs.rmSync(paths.dbFile + s, { force: true });
-      fs.renameSync(tmp, paths.dbFile);
-      await withTool(async (t) => {
-        await t.call("migrate", { backupDir: paths.backups });
-        await t.call("status");
+      // Verifies the exact bytes swapped in; puts the pre-restore data back if the
+      // restored database cannot be migrated to this version (desktop/runtime/restore.ts).
+      await swapInDatabase({
+        dbFile: paths.dbFile,
+        candidate: file,
+        fallback: path.join(paths.backups, preFile),
+        verify: (f) => withTool((t) => t.call<{ ok: boolean; error?: string }>("verify", { file: f })),
+        migrate: () =>
+          withTool(async (t) => {
+            await t.call("migrate", { backupDir: paths.backups });
+            await t.call("status");
+          }),
       });
     } finally {
       await server?.start();
@@ -460,16 +543,18 @@ ipcMain.handle("aharos:testPrint", async (e, raw: unknown) => {
 function buildMenu() {
   const template: MenuItemConstructorOptions[] = [
     {
-      label: "Aharos",
+      label: "RESTORA",
       submenu: [
-        { label: "About Aharos", click: () => void dialog.showMessageBox({ type: "info", title: "About Aharos", message: `Aharos ${app.getVersion()}`, detail: "Restaurant Operating System" }) },
+        { label: "About RESTORA", click: () => void dialog.showMessageBox({ type: "info", title: "About RESTORA", message: `RESTORA ${app.getVersion()}`, detail: "The Operating System for Restaurants" }) },
         { type: "separator" },
         { label: "Back Up Now", click: () => void backupNow() },
         { label: "Restore from Backup…", click: () => void restoreFromBackup() },
         { label: "Open Backups Folder", click: () => void shell.openPath(paths.backups) },
         { label: "Open Logs Folder", click: () => void shell.openPath(paths.logs) },
         { type: "separator" },
-        { role: "quit", label: "Quit Aharos" },
+        // macOS application-menu conventions (⌘H, ⌥⌘H); ⌘Q comes with the quit role.
+        ...(isMac ? ([{ role: "hide", label: "Hide RESTORA" }, { role: "hideOthers" }, { role: "unhide" }, { type: "separator" }] as MenuItemConstructorOptions[]) : []),
+        { role: "quit", label: "Quit RESTORA" },
       ],
     },
     { role: "editMenu" },
@@ -486,11 +571,22 @@ function buildMenu() {
         ...(app.isPackaged ? [] : ([{ role: "toggleDevTools" }] as MenuItemConstructorOptions[])),
       ],
     },
+    ...(isMac ? ([{ role: "windowMenu" }] as MenuItemConstructorOptions[]) : []),
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
+// Closing the last window quits on every platform, macOS included: the local
+// server and database must not keep running in the background with no window.
 app.on("window-all-closed", () => app.quit());
+// macOS: clicking the Dock icon brings the existing window back.
+app.on("activate", () => {
+  const w = mainWindow ?? splash;
+  if (w && !w.isDestroyed()) {
+    if (w.isMinimized()) w.restore();
+    w.show();
+  }
+});
 app.on("before-quit", (e) => {
   if (quitting || !server) return;
   e.preventDefault();

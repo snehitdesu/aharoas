@@ -12,11 +12,12 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 import { api } from "@/lib/api/client";
+import { createKeyedSubmitter } from "@/lib/idempotency";
 import { useQuery, usePaged } from "@/lib/hooks/useApi";
 import { useShell, useOutletId } from "@/lib/shellContext";
 import { formatDate, formatDateTime, formatMoney, formatQty, humanize, shortRef, toNumber } from "@/lib/format";
 import {
-  InventoryTransactionType, InventorySourceType, TransferStatus, IssueStatus, StockCountStatus, WastageStatus, WastageReason, ProductionStatus,
+  AdjustmentReason, InventoryTransactionType, InventorySourceType, TransferStatus, IssueStatus, StockCountStatus, WastageStatus, WastageReason, ProductionStatus,
   TRANSFER_TRANSITIONS, ISSUE_TRANSITIONS, STOCK_COUNT_TRANSITIONS, WASTAGE_TRANSITIONS, PRODUCTION_TRANSITIONS,
 } from "@/constants/enums";
 import { Button } from "@/components/ui/Button";
@@ -29,7 +30,8 @@ import { LoadingState, ErrorState } from "@/components/ui/States";
 import { DateRangeFilter, FilterBar, SearchInput, SelectFilter, rangeToQuery, type DateRange } from "@/components/ui/Filters";
 import { DocumentList, TransitionBar, cancelConfirm, type Doc } from "@/features/backoffice/documents";
 import { LineEditor, emptyLine, toApiLines, type LineDraft, type LineField } from "@/features/backoffice/LineEditor";
-import { materialLabel, unitOf, useDepartments, useMaterials, type DepartmentRow } from "@/features/backoffice/lookups";
+import { MaterialSelect, materialLabel, unitOf, useDepartments, useMaterials, type DepartmentRow } from "@/features/backoffice/lookups";
+import { ActionButton } from "@/components/ui/Confirm";
 
 // ---------------- types (API shapes) ----------------
 
@@ -95,7 +97,8 @@ type StockView = "all" | "low" | "negative";
 
 export function StockScreen() {
   const router = useRouter();
-  const { outletId } = useShell();
+  const { outletId, can } = useShell();
+  const [dialog, setDialog] = useState<null | "opening" | "adjust">(null);
   const stock = useQuery<StockRow[]>(outletId ? "/api/inventory/stock" : null, { outletId: outletId ?? undefined });
   const low = useQuery<LowStockRow[]>(outletId ? "/api/inventory/low-stock" : null, { outletId: outletId ?? undefined });
   const [search, setSearch] = useState("");
@@ -114,7 +117,15 @@ export function StockScreen() {
   const lowWithoutStock = (low.data ?? []).filter((l) => !rows.some((r) => r.materialId === l.materialId));
   return (
     <>
-      <PageHeader title="Stock on hand" subtitle="Derived from the inventory ledger at this outlet" actions={<Link href="/inventory/ledger" className="text-sm text-brand-600 hover:underline">Open ledger →</Link>} />
+      <PageHeader title="Stock on hand" subtitle="Derived from the inventory ledger at this outlet" actions={
+        <div className="flex flex-wrap items-center gap-2">
+          {can("inventory.adjust") && <Button onClick={() => setDialog("opening")}>Opening stock</Button>}
+          {can("inventory.adjust") && <Button onClick={() => setDialog("adjust")}>Adjust stock</Button>}
+          <Link href="/inventory/ledger" className="text-sm text-brand-600 hover:underline">Open ledger →</Link>
+        </div>
+      } />
+      {dialog === "opening" && <OpeningStockDialog onClose={() => setDialog(null)} onDone={stock.reload} />}
+      {dialog === "adjust" && <AdjustStockDialog onClose={() => setDialog(null)} onDone={stock.reload} />}
       <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Stat label="Materials with stock history" value={stock.data ? rows.length : "…"} />
         <Stat label="Stock value" value={stock.data ? formatMoney(totalValue) : "…"} hint="Quantity × weighted average cost" />
@@ -142,6 +153,7 @@ export function StockScreen() {
           { key: "value", header: "Value", numeric: true, cell: (r) => formatMoney(r.value) },
         ]}
       />
+      <UnmappedSalesCard />
       {view === "low" && lowWithoutStock.length > 0 && (
         <Card title="Below reorder level with no stock history" className="mt-4">
           <ul className="divide-y divide-ink-100 text-sm">
@@ -152,6 +164,121 @@ export function StockScreen() {
         </Card>
       )}
     </>
+  );
+}
+
+const openingFields: LineField[] = [
+  { key: "qty", label: "Qty (base unit)", required: true, min: 0 },
+  { key: "rate", label: "Cost per unit", required: true, min: 0 },
+];
+
+/** Go-live stock for materials that have not moved at this outlet yet (once per material). */
+function OpeningStockDialog({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
+  const outletId = useOutletId();
+  const materials = useMaterials();
+  const [lines, setLines] = useState<LineDraft[]>([emptyLine(openingFields)]);
+  const [note, setNote] = useState("");
+  return (
+    <FormDialog open onClose={onClose} title="Opening stock" size="lg" submitLabel="Post opening stock"
+      description="Only for materials with no movement at this outlet yet. Later corrections: an adjustment or a stock count."
+      onSubmit={() => api("/api/inventory/opening-stock", { method: "POST", body: { outletId, note: opt(note), lines: toApiLines(lines, openingFields) } })}
+      onDone={onDone}>
+      <Field label="Note" name="note"><Input value={note} onChange={(e) => setNote(e.target.value)} maxLength={500} placeholder="e.g. Go-live count 1 Oct" /></Field>
+      <LineEditor fields={openingFields} lines={lines} onChange={setLines} materials={materials.items} />
+    </FormDialog>
+  );
+}
+
+/** A manual adjustment with a reason; large ones need approval authority (server rule). */
+function AdjustStockDialog({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
+  const outletId = useOutletId();
+  const materials = useMaterials();
+  const [submitKeyed] = useState(() => createKeyedSubmitter("adj"));
+  const [materialId, setMaterialId] = useState("");
+  const [direction, setDirection] = useState<"IN" | "OUT">("OUT");
+  const [qty, setQty] = useState("");
+  const [reason, setReason] = useState<string>("COUNT_CORRECTION");
+  const [note, setNote] = useState("");
+  return (
+    <FormDialog open onClose={onClose} title="Adjust stock" submitLabel="Post adjustment"
+      description="Posted at the current average cost. Spoilage and other losses of usable stock belong in Wastage."
+      onSubmit={() => {
+        const body = { outletId, materialId, qty: (direction === "OUT" ? -1 : 1) * Number(qty), reason, note };
+        return submitKeyed(body, (idempotencyKey) => api("/api/inventory/adjustments", { method: "POST", body, idempotencyKey }));
+      }}
+      onDone={onDone}>
+      <Field label="Material" name="materialId" required><MaterialSelect materials={materials.items} value={materialId} onChange={setMaterialId} required /></Field>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field label="Direction" name="direction" required>
+          <Select value={direction} onChange={(e) => setDirection(e.target.value as "IN" | "OUT")}><option value="OUT">Reduce stock</option><option value="IN">Add stock</option></Select>
+        </Field>
+        <Field label={`Quantity (${unitOf(materials.byId, materialId) || "base unit"})`} name="qty" required><Input type="number" min={0} step="any" value={qty} onChange={(e) => setQty(e.target.value)} required /></Field>
+      </div>
+      <Field label="Reason" name="reason" required><Select value={reason} onChange={(e) => setReason(e.target.value)}>{AdjustmentReason.values.map((r) => <option key={r} value={r}>{humanize(r)}</option>)}</Select></Field>
+      <Field label="Explanation" name="note" required><Textarea value={note} onChange={(e) => setNote(e.target.value)} minLength={3} maxLength={500} required /></Field>
+    </FormDialog>
+  );
+}
+
+type UnmappedRow = { id: string; posCode: string; posName: string | null; qty: number; source: string; firstSeenAt: string; lastSeenAt: string };
+type MenuOption = { id: string; name: string };
+
+/** Sold items with no recipe mapping: map (optionally posting the missed consumption) or ignore. */
+function UnmappedSalesCard() {
+  const { outletId, can, outlet } = useShell();
+  const q = useQuery<UnmappedRow[]>(outletId ? "/api/inventory/unmapped" : null, { outletId: outletId ?? undefined });
+  const [mapping, setMapping] = useState<UnmappedRow | null>(null);
+  if (!q.data?.length) return null;
+  const resolve = can("recipe.manage");
+  return (
+    <Card title={`Sold without a recipe mapping (${q.data.length})`} className="mt-4">
+      <p className="mb-2 text-sm text-ink-600">These sales did not reduce stock. Map each to a menu item with an approved recipe (optionally posting the missed consumption), or ignore non-stock items.</p>
+      <ul className="divide-y divide-ink-100 text-sm" aria-label="Unmapped sales">
+        {q.data.map((u) => (
+          <li key={u.id} className="flex flex-wrap items-center gap-3 py-2">
+            <span className="font-medium">{u.posName ?? u.posCode}</span>
+            <Badge>{humanize(u.source)}</Badge>
+            <span className="tabular-nums text-ink-600">{formatQty(u.qty)} sold · since {formatDate(u.firstSeenAt, outlet?.timezone)}</span>
+            {resolve && (
+              <span className="ml-auto flex gap-2">
+                <Button size="sm" onClick={() => setMapping(u)}>Map</Button>
+                <ActionButton size="sm" variant="secondary" action={() => api(`/api/inventory/unmapped/${u.id}/resolve`, { method: "POST", body: { action: "IGNORE", note: "No stock effect" } })} success="Ignored" onDone={q.reload}
+                  confirm={{ title: `Ignore ${u.posName ?? u.posCode}?`, message: "Use this only for items that hold no stock (fees, services)." }}>
+                  Ignore
+                </ActionButton>
+              </span>
+            )}
+          </li>
+        ))}
+      </ul>
+      {mapping && <MapUnmappedDialog sale={mapping} onClose={() => setMapping(null)} onDone={q.reload} />}
+    </Card>
+  );
+}
+
+function MapUnmappedDialog({ sale, onClose, onDone }: { sale: UnmappedRow; onClose: () => void; onDone: () => void }) {
+  const outletId = useOutletId();
+  const { can } = useShell();
+  const menu = useQuery<MenuOption[]>("/api/menu", { outletId: outletId ?? undefined });
+  const [menuItemId, setMenuItemId] = useState(sale.posCode);
+  const [consume, setConsume] = useState(can("inventory.adjust"));
+  const items = menu.data ?? [];
+  return (
+    <FormDialog open onClose={onClose} title={`Map ${sale.posName ?? sale.posCode}`} submitLabel="Map"
+      onSubmit={() => api(`/api/inventory/unmapped/${sale.id}/resolve`, { method: "POST", body: { action: "MAP", menuItemId, consume } })} onDone={onDone}>
+      <Field label="Menu item" name="menuItemId" required>
+        <Select value={items.some((i) => i.id === menuItemId) ? menuItemId : ""} onChange={(e) => setMenuItemId(e.target.value)} required>
+          <option value="">Select…</option>
+          {items.map((i) => <option key={i.id} value={i.id}>{i.name}</option>)}
+        </Select>
+      </Field>
+      {can("inventory.adjust") && (
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={consume} onChange={(e) => setConsume(e.target.checked)} />
+          Post the missed consumption for {formatQty(sale.qty)} sold (uses the item&apos;s approved recipe)
+        </label>
+      )}
+    </FormDialog>
   );
 }
 
@@ -253,6 +380,7 @@ function useOutletName() {
 }
 
 function CreateTransferDialog({ open, onClose, onDone }: { open: boolean; onClose: () => void; onDone: (id: string) => void }) {
+  const [submitKeyed] = useState(() => createKeyedSubmitter("trf"));
   const outletId = useOutletId();
   const { outlets } = useShell();
   const materials = useMaterials(open);
@@ -263,7 +391,10 @@ function CreateTransferDialog({ open, onClose, onDone }: { open: boolean; onClos
   return (
     <FormDialog open={open} onClose={onClose} title="New stock transfer" size="lg" submitLabel="Create transfer (draft)"
       description="Stock leaves this outlet when the transfer is dispatched and arrives when the receiving outlet receives it."
-      onSubmit={() => api<Transfer>("/api/inventory/transfers", { method: "POST", body: { fromOutletId: outletId, toOutletId, notes: opt(notes), lines: toApiLines(lines, transferFields) } })}
+      onSubmit={() => {
+        const body = { fromOutletId: outletId, toOutletId, notes: opt(notes), lines: toApiLines(lines, transferFields) };
+        return submitKeyed(body, (idempotencyKey) => api<Transfer>("/api/inventory/transfers", { method: "POST", body, idempotencyKey }));
+      }}
       onDone={(r) => { setLines([emptyLine(transferFields)]); onDone(r.id); }}>
       <Field label="To outlet" name="toOutletId" required hint={targets.length ? undefined : "You have access to no other outlet."}>
         <Select value={toOutletId} onChange={(e) => setTo(e.target.value)} required>
@@ -393,6 +524,7 @@ export function TransferDetail({ id }: { id: string }) {
 const issueFields: LineField[] = [{ key: "qty", label: "Qty", required: true, min: 0 }];
 
 function CreateIssueDialog({ open, onClose, onDone }: { open: boolean; onClose: () => void; onDone: (id: string) => void }) {
+  const [submitKeyed] = useState(() => createKeyedSubmitter("iss"));
   const outletId = useOutletId();
   const materials = useMaterials(open);
   const depts = useDepartments(open ? outletId : null);
@@ -403,7 +535,10 @@ function CreateIssueDialog({ open, onClose, onDone }: { open: boolean; onClose: 
   return (
     <FormDialog open={open} onClose={onClose} title="New stock issue" size="lg" submitLabel="Create issue (draft)"
       description="Issuing stock writes ISSUE rows to the ledger when the document is posted."
-      onSubmit={() => api<Issue>("/api/inventory/issues", { method: "POST", body: { outletId, fromDepartmentId: opt(from), toDepartmentId: opt(to), notes: opt(notes), lines: toApiLines(lines, issueFields) } })}
+      onSubmit={() => {
+        const body = { outletId, fromDepartmentId: opt(from), toDepartmentId: opt(to), notes: opt(notes), lines: toApiLines(lines, issueFields) };
+        return submitKeyed(body, (idempotencyKey) => api<Issue>("/api/inventory/issues", { method: "POST", body, idempotencyKey }));
+      }}
       onDone={(r) => { setLines([emptyLine(issueFields)]); onDone(r.id); }}>
       <div className="grid gap-3 sm:grid-cols-2">
         <Field label="From department" name="fromDepartmentId"><DepartmentSelect depts={depts.data} value={from} onChange={setFrom} /></Field>
@@ -599,6 +734,7 @@ const wastageFields: LineField[] = [{ key: "qty", label: "Qty", required: true, 
 const wastageCost = (w: Wastage) => w.lines.reduce((a, l) => a + toNumber(l.estCost), 0);
 
 function CreateWastageDialog({ open, onClose, onDone }: { open: boolean; onClose: () => void; onDone: (id: string) => void }) {
+  const [submitKeyed] = useState(() => createKeyedSubmitter("wst"));
   const outletId = useOutletId();
   const materials = useMaterials(open);
   const depts = useDepartments(open ? outletId : null);
@@ -609,7 +745,10 @@ function CreateWastageDialog({ open, onClose, onDone }: { open: boolean; onClose
   return (
     <FormDialog open={open} onClose={onClose} title="Record wastage" size="lg" submitLabel="Save draft"
       description="Wastage is saved as a draft; stock is deducted only when it is posted."
-      onSubmit={() => api<Wastage>("/api/inventory/wastage", { method: "POST", body: { outletId, reason, departmentId: opt(departmentId), notes: opt(notes), lines: toApiLines(lines, wastageFields) } })}
+      onSubmit={() => {
+        const body = { outletId, reason, departmentId: opt(departmentId), notes: opt(notes), lines: toApiLines(lines, wastageFields) };
+        return submitKeyed(body, (idempotencyKey) => api<Wastage>("/api/inventory/wastage", { method: "POST", body, idempotencyKey }));
+      }}
       onDone={(r) => { setLines([emptyLine(wastageFields)]); onDone(r.id); }}>
       <div className="grid gap-3 sm:grid-cols-2">
         <Field label="Reason" name="reason" required><Select value={reason} onChange={(e) => setReason(e.target.value)}>{WastageReason.values.map((r) => <option key={r} value={r}>{humanize(r)}</option>)}</Select></Field>

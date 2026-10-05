@@ -2,16 +2,18 @@ import { requireShell } from "@/lib/auth/shell";
 import { OperatorBar } from "@/components/layout/OperatorBar";
 import { ForbiddenPage } from "@/components/ui/States";
 import { ToastProvider } from "@/components/ui/Toast";
+import { ReauthProvider } from "@/components/auth/ReauthProvider";
 import { KitchenScreen } from "@/features/kitchen/components/KitchenScreen";
 
 export const dynamic = "force-dynamic";
-export const metadata = { title: "Kitchen — Aharos" };
+export const metadata = { title: "Kitchen — RESTORA" };
 
 export default async function KitchenPage() {
   const { shell } = await requireShell("/kitchen");
   const has = new Set(shell.permissions);
   return (
     <ToastProvider>
+      <ReauthProvider>
       <div className="flex h-screen flex-col overflow-hidden bg-ink-100">
         <OperatorBar shell={shell} title="Kitchen display" />
         {!shell.outletId ? (
@@ -22,6 +24,7 @@ export default async function KitchenPage() {
           <KitchenScreen key={shell.outletId} outletId={shell.outletId} canUpdate={has.has("kot.update")} />
         )}
       </div>
+      </ReauthProvider>
     </ToastProvider>
   );
 }

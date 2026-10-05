@@ -2,20 +2,26 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'">
-<title>Set up Aharos</title>
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'">
+<title>Set up RESTORA</title>
 <link rel="stylesheet" href="desktop.css">
 <script src="setup.js" defer></script>
 </head>
 <body class="setup">
+<aside aria-label="RESTORA">
+  <div class="brand">
+    <img src="icon.png" alt="" width="34" height="34">
+    <span><span class="wordmark">RESTORA</span><small>The Operating System for Restaurants</small></span>
+  </div>
+  <p class="eyebrow">First-time setup</p>
+  <p class="pitch">The operating system <em>for restaurants.</em></p>
+  <p class="lede">Orders, kitchen, billing, stock and the books run on this computer. Your data stays here, backed up automatically.</p>
+  <div class="sun" aria-hidden="true"></div>
+</aside>
 <main>
-  <header>
-    <img src="icon.png" alt="" width="40" height="40">
-    <div>
-      <h1>Welcome to Aharos</h1>
-      <p class="muted">Let's set up this restaurant computer. It takes about a minute.</p>
-    </div>
-  </header>
+ <div class="inner">
+  <h1>Welcome to RESTORA</h1>
+  <p class="muted">Let's set up this restaurant computer. It takes about a minute.</p>
 
   <ol class="steps" aria-label="Setup steps">
     <li data-step="1" class="active">Restaurant</li>
@@ -27,12 +33,14 @@
     <h2>How will this computer be used?</h2>
     <div class="choices">
       <button type="button" class="choice" id="choose-new">
+        <span class="glyph" aria-hidden="true">+</span>
         <strong>Set up a new restaurant</strong>
         <span>Create your organization, first outlet and Owner account on this computer.</span>
       </button>
       <button type="button" class="choice" disabled aria-disabled="true">
-        <strong>Connect to an existing Aharos</strong>
-        <span>Join another Aharos computer or cloud account. Coming in a later version.</span>
+        <span class="glyph" aria-hidden="true">⇄</span>
+        <strong>Connect to an existing RESTORA</strong>
+        <span>Join another RESTORA computer or cloud account. Coming in a later version.</span>
       </button>
     </div>
   </section>
@@ -73,13 +81,17 @@
   </form>
 
   <section id="step-3" class="panel" hidden>
-    <h2>Aharos is ready</h2>
+    <div class="ready">
+      <span class="seal" aria-hidden="true">✓</span>
+      <h2>RESTORA is ready</h2>
+    </div>
     <p>Your restaurant has been created on this computer. Sign in with <strong id="owner-email"></strong>.</p>
-    <div class="actions"><button type="button" id="finish">Open Aharos</button></div>
+    <div class="actions end"><button type="button" id="finish">Open RESTORA</button></div>
   </section>
 
   <p id="error" class="error" role="alert" hidden></p>
-  <footer class="muted" id="version"></footer>
+  <footer id="version"></footer>
+ </div>
 </main>
 </body>
 </html>

@@ -19,6 +19,7 @@
 import { randomBytes } from "node:crypto";
 import type { PrismaClient } from "@prisma/client";
 import { z } from "zod";
+import { gstinSchema } from "@/domain/gst";
 import { UnitKind, TableStatus } from "@/constants/enums";
 import { prisma } from "@/server/db/client";
 import { type AccessContext, assertOutletAccess, ForbiddenError, NotFoundError, ValidationError } from "@/server/db/scope";
@@ -228,7 +229,7 @@ const vendorSchema = z.object({
   phone: z.string().max(20).optional(),
   email: z.string().email().optional(),
   address: z.string().max(500).optional(),
-  gstin: z.string().regex(/^[0-9A-Z]{15}$/, "GSTIN must be 15 characters").optional(),
+  gstin: gstinSchema.optional(),
   bankAccount: z.string().regex(/^[0-9]{6,20}$/, "Bank account must be 6-20 digits").optional(),
   bankIfsc: z.string().regex(/^[A-Z]{4}0[A-Z0-9]{6}$/, "Invalid IFSC").optional(),
   paymentTerms: z.string().max(20).optional(),
@@ -319,12 +320,14 @@ const outletSchema = z.object({
   code: z.string().trim().min(1).max(20),
   name: z.string().trim().min(1).max(120),
   address: z.string().max(500).optional(),
-  gstin: z.string().regex(/^[0-9A-Z]{15}$/, "GSTIN must be 15 characters").optional(),
+  gstin: gstinSchema.optional(),
   phone: z.string().max(20).optional(),
   currency: z.string().length(3).default("INR"),
   timezone: tz.default("Asia/Kolkata"),
   openTime: hhmm.optional(),
   closeTime: hhmm.optional(),
+  /** Invoice number prefix (1–4 letters/digits); default: from the outlet code. */
+  invoiceSeries: z.string().trim().regex(/^[A-Z0-9]{1,4}$/, "Invoice series: 1–4 capital letters or digits").optional(),
 });
 
 export async function createOutlet(ctx: AccessContext, input: z.input<typeof outletSchema>, db: Client = prisma) {
@@ -341,12 +344,13 @@ export async function updateOutlet(ctx: AccessContext, outletId: string, patch: 
   const data = outletSchema.partial().extend({ active: z.boolean().optional() }).parse(patch);
   assertOutletAccess(ctx, outletId);
   assertCan(ctx, "outlet.manage", outletId);
-  const structural = data.code !== undefined || data.timezone !== undefined || data.active !== undefined || data.currency !== undefined;
-  if (structural && !ctx.isSuperAdmin && !ctx.isOrgWide) throw new ForbiddenError("Changing an outlet's code, timezone, currency or status needs an org-wide role");
+  // Tax identity (GSTIN, invoice series) is structural too: it changes every invoice issued afterwards.
+  const structural = data.code !== undefined || data.timezone !== undefined || data.active !== undefined || data.currency !== undefined || data.gstin !== undefined || data.invoiceSeries !== undefined;
+  if (structural && !ctx.isSuperAdmin && !ctx.isOrgWide) throw new ForbiddenError("Changing an outlet's code, timezone, currency, status, GSTIN or invoice series needs an org-wide role");
   return runInTx(db, async (tx) => {
     const o = await loadOrg(await tx.outlet.findUnique({ where: { id: outletId } }), ctx, "Outlet");
     const updated = await unique(() => tx.outlet.update({ where: { id: outletId }, data }), `Outlet code "${data.code}" already exists`);
-    await writeAudit(tx, ctx, { action: "UPDATE", entityType: "Outlet", entityId: outletId, outletId, before: { code: o.code, name: o.name, timezone: o.timezone, active: o.active }, after: data });
+    await writeAudit(tx, ctx, { action: "UPDATE", entityType: "Outlet", entityId: outletId, outletId, before: { code: o.code, name: o.name, timezone: o.timezone, active: o.active, gstin: o.gstin, invoiceSeries: o.invoiceSeries }, after: data });
     return updated;
   });
 }

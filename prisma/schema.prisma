@@ -71,6 +71,8 @@ model Outlet {
   timezone       String       @default("Asia/Kolkata")
   openTime       String? // "09:00"
   closeTime      String? // "23:30"
+  // Invoice number series prefix (≤ 4 chars), e.g. "HYD" -> HYD/2627/00001.
+  invoiceSeries  String?
   active         Boolean      @default(true)
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
@@ -100,18 +102,22 @@ model Department {
 }
 
 model User {
-  id             String       @id @default(cuid())
-  organizationId String
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  email          String
-  name           String
-  passwordHash   String
-  phone          String?
-  active         Boolean      @default(true)
-  isSuperAdmin   Boolean      @default(false)
-  lastLoginAt    DateTime?
-  createdAt      DateTime     @default(now())
-  updatedAt      DateTime     @updatedAt
+  id                   String       @id @default(cuid())
+  organizationId       String
+  organization         Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  email                String
+  name                 String
+  passwordHash         String
+  phone                String?
+  active               Boolean      @default(true)
+  isSuperAdmin         Boolean      @default(false)
+  lastLoginAt          DateTime?
+  // Owner recovery key (H2): SHA-256 of a 150-bit key shown to the Owner once.
+  // Only active org-wide OWNERs hold one; it rotates on every successful use.
+  recoveryKeyHash      String?
+  recoveryKeyCreatedAt DateTime?
+  createdAt            DateTime     @default(now())
+  updatedAt            DateTime     @updatedAt
 
   memberships    Membership[]
   sessions       Session[]
@@ -143,15 +149,21 @@ model Membership {
 }
 
 model Session {
-  id        String    @id @default(cuid())
-  userId    String
-  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  tokenHash String    @unique
-  ip        String?
-  userAgent String?
-  expiresAt DateTime
-  revokedAt DateTime?
-  createdAt DateTime  @default(now())
+  id              String    @id @default(cuid())
+  userId          String
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash       String    @unique
+  ip              String?
+  userAgent       String?
+  expiresAt       DateTime
+  revokedAt       DateTime?
+  createdAt       DateTime  @default(now())
+  // Idle timeout (H3): last meaningful activity (null = createdAt). Written at
+  // most once a minute; background polling never advances it.
+  lastActivityAt  DateTime?
+  // Step-up re-authentication grant: one scope, short-lived, bound to this session.
+  reauthScope     String?
+  reauthExpiresAt DateTime?
 
   @@index([userId])
   @@index([expiresAt])
@@ -255,6 +267,7 @@ model Material {
   @@unique([organizationId, sku])
   @@index([organizationId, active])
   @@index([categoryId])
+  @@index([baseUnitId])
 }
 
 // Weighted-average cost is per outlet (purchases differ by outlet).
@@ -349,6 +362,8 @@ model MenuItem {
   taxPct         Decimal       @default(5)
   station        String        @default("KITCHEN") // routing hint for KOT: KITCHEN | BAR | BAKERY
   posCode        String? // external POS item code for mapping
+  // HSN / SAC code for tax invoices (restaurant service: SAC 996331).
+  hsnSac         String?
   isVeg          Boolean       @default(true)
   active         Boolean       @default(true)
   soldOut        Boolean       @default(false)
@@ -386,13 +401,15 @@ model OutletMenuItem {
 }
 
 model MenuItemVariant {
-  id             String   @id @default(cuid())
-  organizationId String
-  menuItemId     String
-  menuItem       MenuItem @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
-  name           String // "Half", "Full"
-  priceDelta     Decimal  @default(0)
-  active         Boolean  @default(true)
+  id                String   @id @default(cuid())
+  organizationId    String
+  menuItemId        String
+  menuItem          MenuItem @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+  name              String // "Half", "Full"
+  priceDelta        Decimal  @default(0)
+  // Inventory: this variant consumes this multiple of the item's recipe (Half = 0.5, Large = 1.5).
+  consumptionFactor Decimal  @default(1)
+  active            Boolean  @default(true)
 
   @@unique([menuItemId, name])
   @@index([organizationId])
@@ -420,6 +437,10 @@ model ModifierOption {
   group          ModifierGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
   name           String
   priceDelta     Decimal       @default(0)
+  // Inventory: an add-on that uses stock (e.g. extra cheese = 30 g of Cheese per unit ordered).
+  materialId     String?
+  materialQty    Decimal?
+  unitId         String?
   active         Boolean       @default(true)
 
   @@unique([groupId, name])
@@ -545,6 +566,7 @@ model RestaurantTable {
   @@unique([outletId, code])
   @@index([organizationId, outletId])
   @@index([outletId, status])
+  @@index([floorId])
 }
 
 // ============================================================
@@ -654,6 +676,7 @@ model Reservation {
 
   @@index([organizationId, outletId])
   @@index([outletId, reservedAt])
+  @@index([customerId])
 }
 
 // Table occupancy locks: one row per (table, 15-minute slot) held by an active
@@ -718,6 +741,9 @@ model Order {
   // original order; reuse with a different request is rejected (requestHash).
   idempotencyKey String?
   requestHash    String?
+  // B2B buyer details for the tax invoice (set before the invoice is issued).
+  buyerGstin     String?
+  buyerName      String?
   createdById    String?
   billedAt       DateTime?
   paidAt         DateTime?
@@ -727,12 +753,15 @@ model Order {
   items    OrderItem[]
   payments Payment[]
   kots     Kot[]
+  rounds   OrderRound[]
 
+  @@unique([outletId, invoiceNo])
   @@unique([outletId, source, externalRef])
   @@unique([organizationId, idempotencyKey])
   @@index([organizationId, outletId, createdAt])
   @@index([outletId, status])
   @@index([customerId])
+  @@index([tableId, status])
 }
 
 model OrderItem {
@@ -744,12 +773,16 @@ model OrderItem {
   menuItemId     String?
   menuItem       MenuItem? @relation(fields: [menuItemId], references: [id], onDelete: SetNull)
   posItemCode    String? // captured even when unmapped
+  // The menu variant ordered (drives its recipe consumption factor).
+  variantId      String?
   name           String // snapshot of item name at time of order
   qty            Decimal   @default(1)
   unitPrice      Decimal   @default(0)
   discount       Decimal   @default(0)
   taxPct         Decimal   @default(0)
   lineTotal      Decimal   @default(0)
+  // HSN / SAC snapshot at order time.
+  hsnSac         String?
   station        String    @default("KITCHEN")
   notes          String?
   createdAt      DateTime  @default(now())
@@ -762,11 +795,32 @@ model OrderItem {
   @@index([menuItemId])
 }
 
+/// One "round" of items added to a running order (captain / POS) with its
+/// Idempotency-Key: a retried round returns the original instead of adding the
+/// lines twice. The lines themselves are ordinary OrderItems.
+model OrderRound {
+  id             String   @id @default(cuid())
+  organizationId String
+  orderId        String
+  order          Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  idempotencyKey String
+  requestHash    String
+  itemCount      Int      @default(0)
+  fired          Boolean  @default(false)
+  createdById    String?
+  createdAt      DateTime @default(now())
+
+  @@unique([organizationId, idempotencyKey])
+  @@index([orderId])
+}
+
 model OrderItemModifier {
   id          String    @id @default(cuid())
   orderItemId String
   orderItem   OrderItem @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
   name        String
+  // The configured option ordered (drives add-on stock consumption).
+  optionId    String?
   priceDelta  Decimal   @default(0)
 
   @@index([orderItemId])
@@ -794,7 +848,8 @@ model Payment {
 
   refunds Refund[]
 
-  @@unique([provider, providerRef])
+  /// Provider references are only unique within one tenant (two restaurants' POS/gateway accounts may reuse ids).
+  @@unique([organizationId, provider, providerRef])
   @@unique([organizationId, idempotencyKey])
   @@index([organizationId, outletId, createdAt])
   @@index([orderId])
@@ -858,6 +913,7 @@ model Kot {
   @@unique([outletId, number])
   @@index([organizationId, outletId, status])
   @@index([orderId])
+  @@index([stationId])
 }
 
 model KotItem {
@@ -872,6 +928,7 @@ model KotItem {
   notes       String?
 
   @@index([kotId])
+  @@index([orderItemId]) // "is this line on a KOT?" — without it every round/bill read seq-scanned KotItem (SSI relation lock)
 }
 
 // ============================================================
@@ -921,6 +978,12 @@ model PurchaseOrder {
   tax            Decimal   @default(0)
   total          Decimal   @default(0)
   notes          String?
+  // Client Idempotency-Key for creation: a retry with the same key + request
+  // returns the original document; reuse for a different request is refused.
+  idempotencyKey String?
+  requestHash    String?
+  // The approved indent this PO was raised from (raising the PO closes it).
+  indentId       String?
   createdById    String?
   approvedById   String?
   approvedAt     DateTime?
@@ -930,7 +993,9 @@ model PurchaseOrder {
   lines    PurchaseOrderLine[]
   receipts GoodsReceipt[]
 
+  @@unique([organizationId, idempotencyKey])
   @@unique([outletId, number])
+  @@index([indentId])
   @@index([organizationId, outletId, status])
   @@index([vendorId])
 }
@@ -962,6 +1027,10 @@ model GoodsReceipt {
   status         String         @default("DRAFT") // DRAFT | POSTED (posting writes the inventory ledger)
   receivedAt     DateTime       @default(now())
   notes          String?
+  // Client Idempotency-Key for creation: a retry with the same key + request
+  // returns the original document; reuse for a different request is refused.
+  idempotencyKey String?
+  requestHash    String?
   createdById    String?
   postedAt       DateTime?
   createdAt      DateTime       @default(now())
@@ -969,6 +1038,7 @@ model GoodsReceipt {
   lines GoodsReceiptLine[]
   bills PurchaseBill[]
 
+  @@unique([organizationId, idempotencyKey])
   @@unique([outletId, number])
   @@index([organizationId, outletId, status])
   @@index([vendorId])
@@ -993,30 +1063,39 @@ model GoodsReceiptLine {
 }
 
 model PurchaseBill {
-  id             String        @id @default(cuid())
-  organizationId String
-  outletId       String
-  number         String
-  vendorId       String
-  grnId          String?
-  grn            GoodsReceipt? @relation(fields: [grnId], references: [id], onDelete: SetNull)
-  billDate       DateTime      @default(now())
-  dueDate        DateTime?
-  subtotal       Decimal       @default(0)
-  tax            Decimal       @default(0)
-  total          Decimal       @default(0)
-  paidAmount     Decimal       @default(0)
-  status         String        @default("OPEN") // OPEN | PARTIAL | PAID | CANCELLED
-  createdById    String?
-  createdAt      DateTime      @default(now())
-  updatedAt      DateTime      @updatedAt
+  id              String        @id @default(cuid())
+  organizationId  String
+  outletId        String
+  number          String
+  vendorId        String
+  grnId           String?
+  grn             GoodsReceipt? @relation(fields: [grnId], references: [id], onDelete: SetNull)
+  billDate        DateTime      @default(now())
+  dueDate         DateTime?
+  subtotal        Decimal       @default(0)
+  tax             Decimal       @default(0)
+  total           Decimal       @default(0)
+  paidAmount      Decimal       @default(0)
+  status          String        @default("OPEN") // OPEN | PARTIAL | PAID | CANCELLED
+  // Client Idempotency-Key for creation: a retry with the same key + request
+  // returns the original document; reuse for a different request is refused.
+  idempotencyKey  String?
+  requestHash     String?
+  // The vendor's own invoice number: at most one bill per vendor invoice.
+  vendorInvoiceNo String?
+  createdById     String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
 
   lines    PurchaseBillLine[]
   payments VendorPayment[]
 
+  @@unique([organizationId, idempotencyKey])
+  @@unique([organizationId, vendorId, vendorInvoiceNo])
   @@unique([outletId, number])
   @@index([organizationId, outletId, status])
   @@index([vendorId])
+  @@index([grnId])
 }
 
 model PurchaseBillLine {
@@ -1046,6 +1125,11 @@ model VendorPayment {
   idempotencyKey String?
   paidAt         DateTime      @default(now())
   actorId        String?
+  // Reversal (bounced cheque / returned transfer): the payment stops counting
+  // against its bill; the row is kept.
+  reversedAt     DateTime?
+  reversedById   String?
+  reversalReason String?
   createdAt      DateTime      @default(now())
 
   @@unique([organizationId, idempotencyKey])
@@ -1095,6 +1179,7 @@ model InventoryLedger {
   @@index([materialId, createdAt])
   @@index([outletId, txnType])
   @@index([sourceType, sourceId])
+  @@index([correctionOfId])
 }
 
 // ============================================================
@@ -1109,6 +1194,10 @@ model InventoryTransfer {
   toOutletId     String
   status         String    @default("DRAFT") // DRAFT | DISPATCHED | RECEIVED | CANCELLED
   notes          String?
+  // Client Idempotency-Key for creation: a retry with the same key + request
+  // returns the original document; reuse for a different request is refused.
+  idempotencyKey String?
+  requestHash    String?
   createdById    String?
   dispatchedAt   DateTime?
   receivedAt     DateTime?
@@ -1116,6 +1205,7 @@ model InventoryTransfer {
 
   lines InventoryTransferLine[]
 
+  @@unique([organizationId, idempotencyKey])
   @@unique([organizationId, number])
   @@index([organizationId, status])
   @@index([fromOutletId])
@@ -1147,12 +1237,17 @@ model InventoryIssue {
   toDepartmentId   String?
   status           String    @default("DRAFT") // DRAFT | ISSUED | CANCELLED
   notes            String?
+  // Client Idempotency-Key for creation: a retry with the same key + request
+  // returns the original document; reuse for a different request is refused.
+  idempotencyKey   String?
+  requestHash      String?
   createdById      String?
   issuedAt         DateTime?
   createdAt        DateTime  @default(now())
 
   lines InventoryIssueLine[]
 
+  @@unique([organizationId, idempotencyKey])
   @@unique([outletId, number])
   @@index([organizationId, outletId, status])
 }
@@ -1179,11 +1274,16 @@ model Wastage {
   reason         String   @default("SPOILAGE") // SPOILAGE | SPILLAGE | PREP_LOSS | EXPIRED | DAMAGED | STAFF_MEAL | OVERPRODUCTION | OTHER
   status         String   @default("POSTED") // DRAFT | POSTED | CANCELLED (posting writes the ledger)
   notes          String?
+  // Client Idempotency-Key for creation: a retry with the same key + request
+  // returns the original document; reuse for a different request is refused.
+  idempotencyKey String?
+  requestHash    String?
   createdById    String?
   createdAt      DateTime @default(now())
 
   lines WastageLine[]
 
+  @@unique([organizationId, idempotencyKey])
   @@unique([outletId, number])
   @@index([organizationId, outletId])
 }
@@ -1278,18 +1378,26 @@ model ProductionLine {
 // ============================================================
 
 model Expense {
-  id             String   @id @default(cuid())
+  id             String    @id @default(cuid())
   organizationId String
   outletId       String
   category       String // RENT | UTILITIES | SALARY | REPAIRS | MISC ...
   amount         Decimal
   description    String?
-  paidVia        String   @default("CASH") // CASH | BANK | UPI | PETTY_CASH
+  paidVia        String    @default("CASH") // CASH | BANK | UPI | PETTY_CASH
   attachmentUrl  String?
-  spentAt        DateTime @default(now())
+  spentAt        DateTime  @default(now())
+  // Client Idempotency-Key: a retried submission returns the original row.
+  idempotencyKey String?
+  requestHash    String?
+  // Void (correction): voided expenses leave every total; the row is kept.
+  voidedAt       DateTime?
+  voidedById     String?
+  voidReason     String?
   createdById    String?
-  createdAt      DateTime @default(now())
+  createdAt      DateTime  @default(now())
 
+  @@unique([organizationId, idempotencyKey])
   @@index([organizationId, outletId, spentAt])
 }
 
@@ -1305,8 +1413,14 @@ model PettyCashTxn {
   attachmentUrl  String?
   approvedById   String?
   actorId        String?
+  // Client Idempotency-Key: a retried submission returns the original row.
+  idempotencyKey String?
+  requestHash    String?
+  // The expense this movement paid (a voided expense posts an opposite movement).
+  expenseId      String?
   createdAt      DateTime @default(now())
 
+  @@unique([organizationId, idempotencyKey])
   @@index([organizationId, outletId, createdAt])
 }
 
@@ -1318,8 +1432,14 @@ model CashDrawerSession {
   openingFloat   Decimal   @default(0)
   closingCount   Decimal?
   status         String    @default("OPEN") // OPEN | CLOSED
+  // Frozen at close: expected = float + net cash sales + pay-ins − pay-outs.
+  expectedCash   Decimal?
+  variance       Decimal?
+  closedById     String?
   openedAt       DateTime  @default(now())
   closedAt       DateTime?
+
+  movements CashDrawerMovement[]
 
   @@index([organizationId, outletId, status])
 }
@@ -1413,6 +1533,7 @@ model AggregatorSettlement {
   createdAt      DateTime   @default(now())
 
   @@index([organizationId, outletId])
+  @@index([aggregatorId])
 }
 
 // ============================================================
@@ -1526,19 +1647,38 @@ model UnmappedSale {
 }
 
 model IntegrationConnection {
-  id             String    @id @default(cuid())
-  organizationId String
-  outletId       String?
-  kind           String // POS | PAYMENT | AGGREGATOR | SHEETS | WHATSAPP | EMAIL
-  provider       String
-  status         String    @default("DISCONNECTED") // CONNECTED | DISCONNECTED | ERROR
-  // Config holds NON-secret settings only; secrets live in env vars.
-  config         String? // JSON
-  lastCheckedAt  DateTime?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  id               String    @id @default(cuid())
+  organizationId   String
+  outletId         String?
+  kind             String // POS | PAYMENT | AGGREGATOR | SHEETS | WHATSAPP | EMAIL
+  provider         String
+  status           String    @default("DISCONNECTED") // CONNECTED | DISCONNECTED | ERROR
+  // Config holds NON-secret settings only.
+  config           String? // JSON
+  /// The provider's identifier for THIS tenant's account/store (Petpooja restID,
+  /// aggregator store id, gateway merchant account id). Inbound webhooks are
+  /// bound to a tenant ONLY through this mapping — never through ids in the body.
+  externalRef      String?
+  /// Optional per-tenant webhook signing secret, AES-256-GCM encrypted
+  /// (server/integrations/secrets.ts). When set, the deployment-wide provider
+  /// secret is NOT accepted for this tenant.
+  webhookSecretEnc String?
+  /// SANDBOX | LIVE — what the operator declared; adapters that cannot reach a
+  /// live provider never report LIVE (see docs/phase7-integrations.md).
+  mode             String    @default("SANDBOX")
+  /// Provider API credentials (JSON), AES-256-GCM encrypted. Write-only.
+  credentialsEnc   String?
+  lastCheckedAt    DateTime?
+  lastSuccessAt    DateTime?
+  lastFailureAt    DateTime?
+  /// Safe, secret-free message of the last failure.
+  lastError        String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 
   @@unique([organizationId, outletId, kind, provider])
+  /// One provider account maps to exactly one tenant.
+  @@unique([kind, provider, externalRef])
   @@index([organizationId])
 }
 
@@ -1610,8 +1750,24 @@ model Notification {
   readAt         DateTime?
   createdAt      DateTime  @default(now())
 
+  reads NotificationRead[]
+
   @@index([organizationId, outletId])
   @@index([userId, readAt])
+}
+
+/// Per-user read receipt for a BROADCAST notification (userId = null on the
+/// notification). Personal notifications keep using Notification.readAt.
+model NotificationRead {
+  id             String       @id @default(cuid())
+  organizationId String
+  notificationId String
+  notification   Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+  userId         String
+  readAt         DateTime     @default(now())
+
+  @@unique([notificationId, userId])
+  @@index([organizationId, userId])
 }
 
 // Append-only audit trail. Normal users can never delete these rows.
@@ -1632,4 +1788,214 @@ model AuditLog {
   @@index([organizationId, outletId, createdAt])
   @@index([entityType, entityId])
   @@index([actorId])
+}
+
+// ============================================================
+// Phase 4 — finance
+// ============================================================
+
+/// Expense categories per organization (defaults provisioned on first use).
+model ExpenseCategory {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now())
+
+  @@unique([organizationId, name])
+}
+
+/// Non-sale cash in / out of an open drawer (float top-up, cash paid out).
+model CashDrawerMovement {
+  id             String            @id @default(cuid())
+  organizationId String
+  outletId       String
+  sessionId      String
+  session        CashDrawerSession @relation(fields: [sessionId], references: [id], onDelete: Restrict)
+  type           String // PAY_IN | PAY_OUT
+  amount         Decimal
+  reason         String
+  actorId        String?
+  idempotencyKey String?
+  requestHash    String?
+  createdAt      DateTime          @default(now())
+
+  @@unique([organizationId, idempotencyKey])
+  @@index([sessionId])
+  @@index([organizationId, outletId, createdAt])
+}
+
+/// Gapless invoice / credit-note counters per outlet, financial year and kind.
+model InvoiceSequence {
+  id             String   @id @default(cuid())
+  organizationId String
+  outletId       String
+  fiscalYear     String // "2026-27"
+  kind           String // INVOICE | CREDIT_NOTE
+  lastNumber     Int      @default(0)
+  updatedAt      DateTime @updatedAt
+
+  @@unique([outletId, fiscalYear, kind])
+}
+
+/// An issued invoice or credit note: immutable tax snapshot (GST-ready data).
+model TaxInvoice {
+  id                String   @id @default(cuid())
+  organizationId    String
+  outletId          String
+  orderId           String
+  kind              String // INVOICE | CREDIT_NOTE
+  number            String
+  fiscalYear        String
+  seq               Int
+  /// Exactly-once key: "inv:<orderId>" or "cn:<refundId>".
+  sourceKey         String   @unique
+  originalInvoiceId String?
+  refundId          String?
+  issuedAt          DateTime @default(now())
+  sellerName        String
+  sellerAddress     String?
+  sellerGstin       String?
+  sellerStateCode   String?
+  buyerName         String?
+  buyerGstin        String?
+  /// State code of the place of supply.
+  placeOfSupply     String?
+  supplyType        String // INTRA (CGST+SGST) | INTER (IGST) | UNREGISTERED (no GST)
+  taxableValue      Decimal
+  cgst              Decimal  @default(0)
+  sgst              Decimal  @default(0)
+  igst              Decimal  @default(0)
+  totalTax          Decimal
+  total             Decimal
+  reason            String?
+  createdById       String?
+
+  lines TaxInvoiceLine[]
+
+  @@unique([outletId, number])
+  @@index([organizationId, outletId, issuedAt])
+  @@index([orderId])
+}
+
+model TaxInvoiceLine {
+  id             String     @id @default(cuid())
+  organizationId String
+  invoiceId      String
+  invoice        TaxInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  ratePct        Decimal
+  hsnSac         String?
+  taxableValue   Decimal
+  cgst           Decimal    @default(0)
+  sgst           Decimal    @default(0)
+  igst           Decimal    @default(0)
+
+  @@index([invoiceId])
+}
+
+// ============================================================
+// PHASE 7 — PRINTERS / CASH DRAWER / OUTBOUND INTEGRATIONS
+// ============================================================
+
+/// A receipt / KOT printer at an outlet. Transport NETWORK_ESCPOS = raw ESC/POS
+/// over TCP to a LAN printer (IP literal in a private range); SIMULATED = no
+/// hardware (jobs are rendered and kept, never reported as printed on paper).
+model Printer {
+  id             String    @id @default(cuid())
+  organizationId String
+  outletId       String
+  name           String
+  /// RECEIPT | KOT
+  role           String    @default("RECEIPT")
+  /// KOT printers: the kitchen station they print for (null = every station).
+  station        String?
+  /// NETWORK_ESCPOS | SIMULATED
+  transport      String    @default("SIMULATED")
+  host           String?
+  port           Int       @default(9100)
+  /// Characters per line (58 mm = 32, 80 mm = 42/48).
+  width          Int       @default(42)
+  /// A cash drawer is wired to this printer's kick port.
+  cashDrawer     Boolean   @default(false)
+  /// KOT printers: print new tickets automatically.
+  autoPrint      Boolean   @default(true)
+  active         Boolean   @default(true)
+  /// ONLINE | OFFLINE | UNKNOWN (last probe / job)
+  lastStatus     String    @default("UNKNOWN")
+  lastError      String?
+  lastSeenAt     DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  jobs PrintJob[]
+
+  @@unique([outletId, name])
+  @@index([organizationId, outletId])
+}
+
+/// One print (or drawer-kick) attempt series. dedupeKey makes the FIRST print of
+/// a receipt / KOT on a printer happen once; reprints are separate, audited jobs.
+model PrintJob {
+  id             String    @id @default(cuid())
+  organizationId String
+  outletId       String
+  printerId      String
+  printer        Printer   @relation(fields: [printerId], references: [id], onDelete: Cascade)
+  /// RECEIPT | KOT | TEST | DRAWER
+  kind           String
+  sourceType     String?
+  sourceId       String?
+  dedupeKey      String
+  /// QUEUED | PRINTED | SIMULATED | FAILED
+  status         String    @default("QUEUED")
+  attempts       Int       @default(0)
+  lastError      String?
+  /// Rendered text (no secrets; what was / would be printed).
+  content        String
+  reprintOfId    String?
+  reason         String?
+  requestedById  String?
+  createdAt      DateTime  @default(now())
+  printedAt      DateTime?
+
+  @@unique([organizationId, dedupeKey])
+  @@index([organizationId, outletId, status])
+  @@index([sourceType, sourceId])
+  @@index([printerId])
+}
+
+/// Outbound integration work (customer messages, aggregator status pushes,
+/// accounting vouchers): idempotent per (organization, idempotencyKey), with a
+/// bounded attempt count and the provider's reference / failure reason.
+model IntegrationDelivery {
+  id             String    @id @default(cuid())
+  organizationId String
+  outletId       String?
+  /// MESSAGE | AGGREGATOR_STATUS | ACCOUNTING_VOUCHER
+  kind           String
+  provider       String
+  /// MOCK | SANDBOX | LIVE — fixed when the delivery is created
+  mode           String
+  idempotencyKey String
+  /// Masked destination (e.g. +91******3210); never a credential.
+  target         String?
+  /// Secret-free JSON of what is / was sent.
+  payload        String
+  /// PENDING | SENT | DELIVERED | FAILED | SKIPPED
+  status         String    @default("PENDING")
+  attempts       Int       @default(0)
+  maxAttempts    Int       @default(5)
+  nextAttemptAt  DateTime?
+  lastError      String?
+  providerRef    String?
+  sourceType     String?
+  sourceId       String?
+  batchId        String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  sentAt         DateTime?
+
+  @@unique([organizationId, idempotencyKey])
+  @@index([organizationId, kind, status])
+  @@index([provider, providerRef])
 }

@@ -1,4 +1,5 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac } from "node:crypto";
+import { hmacMatches, stringAt } from "@/integrations/hmac";
 import { z } from "zod";
 import { OrderChannel, OrderSource, PaymentMethod } from "@/constants/enums";
 import type { NormalizedOrder, POSProvider } from "./types";
@@ -7,7 +8,10 @@ import type { NormalizedOrder, POSProvider } from "./types";
 const payloadSchema = z.object({
   eventId: z.string(),
   externalRef: z.string(),
-  outletId: z.string(),
+  /** The provider's restaurant/store id (tenant binding: IntegrationConnection.externalRef). */
+  storeId: z.string().min(1),
+  /** Optional hint; must equal the bound outlet or the delivery is rejected. */
+  outletId: z.string().optional(),
   source: OrderSource.zod.default("PETPOOJA"),
   channel: OrderChannel.zod.default("AGGREGATOR"),
   placedAt: z.string().optional(),
@@ -47,14 +51,12 @@ export class MockPOSProvider implements POSProvider {
     return createHmac("sha256", secret).update(rawBody).digest("hex");
   }
 
-  verifyWebhook(rawBody: string, signature: string | undefined): boolean {
-    if (!signature) return false;
-    const expected = MockPOSProvider.sign(rawBody, this.secret());
-    try {
-      return timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
-    } catch {
-      return false;
-    }
+  verifyWebhook(rawBody: string, signature: string | undefined, secret?: string): boolean {
+    return hmacMatches(rawBody, signature, secret ?? this.secret());
+  }
+
+  accountRef(payload: unknown): string | undefined {
+    return stringAt(payload, "storeId");
   }
 
   normalizeOrder(payload: unknown): NormalizedOrder {
@@ -62,7 +64,7 @@ export class MockPOSProvider implements POSProvider {
     return {
       eventId: p.eventId,
       externalRef: p.externalRef,
-      outletId: p.outletId,
+      outletId: p.outletId ?? "",
       source: p.source,
       channel: p.channel,
       placedAt: p.placedAt ? new Date(p.placedAt) : new Date(),

@@ -133,7 +133,8 @@ export function cartContextFromOrder(order: {
   covers?: number | null;
   customer?: CartCustomer | null;
 }): { orderType: OrderType; tableId: string | null; covers: number; customer: CartCustomer | null } {
-  const orderType = POS_CHANNELS.includes(order.channel as OrderType) ? (order.channel as OrderType) : "TAKEAWAY";
+  // A guest's QR order is a dine-in order at its table; other channels without a POS type show as takeaway.
+  const orderType = POS_CHANNELS.includes(order.channel as OrderType) ? (order.channel as OrderType) : order.channel === "QR" && order.tableId ? "DINE_IN" : "TAKEAWAY";
   return {
     orderType,
     tableId: orderType === "DINE_IN" ? order.tableId : null,

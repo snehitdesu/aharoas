@@ -1,5 +1,5 @@
 import { test, expect, type Browser, type Page } from "@playwright/test";
-import { statePath, appAlert } from "./helpers";
+import { statePath, appAlert, confirmPasswordIfPrompted } from "./helpers";
 
 /**
  * Account provisioning + password lifecycle through the real UI. Uses only
@@ -55,6 +55,7 @@ test.describe.serial("account provisioning and password lifecycle", () => {
     await dialog.getByLabel("Email").fill(email);
     await dialog.getByRole("combobox").first().selectOption("CASHIER");
     await dialog.getByRole("button", { name: "Add", exact: true }).click();
+    await confirmPasswordIfPrompted(page, page.getByRole("dialog", { name: "Password setup link" }));
     setupLink = await readLinkDialog(page, "Password setup link");
     await expect(page.getByRole("row").filter({ hasText: email })).toBeVisible();
   });
@@ -124,6 +125,7 @@ test.describe.serial("account provisioning and password lifecycle", () => {
     const row = page.getByRole("row").filter({ hasText: email });
     await row.getByRole("button", { name: "Password link" }).click();
     await page.getByRole("dialog", { name: /Issue password link/ }).getByRole("button", { name: "Issue link" }).click();
+    await confirmPasswordIfPrompted(page, page.getByRole("dialog", { name: "Password reset link" }));
     const resetLink = await readLinkDialog(page, "Password reset link");
 
     const user = await freshPage(browser);
