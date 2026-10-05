@@ -1,0 +1,114 @@
+{
+  "analytics": {
+    "w": 2880,
+    "h": 1800
+  },
+  "analytics-menu": {
+    "w": 2880,
+    "h": 1800
+  },
+  "analytics-sales": {
+    "w": 2880,
+    "h": 1800
+  },
+  "captain": {
+    "w": 1170,
+    "h": 2532
+  },
+  "dashboard": {
+    "w": 2880,
+    "h": 1800
+  },
+  "finance": {
+    "w": 2880,
+    "h": 1800
+  },
+  "finance-drawer": {
+    "w": 2880,
+    "h": 1800
+  },
+  "finance-expenses": {
+    "w": 2880,
+    "h": 1800
+  },
+  "guest-cart": {
+    "w": 1170,
+    "h": 2532
+  },
+  "guest-menu": {
+    "w": 1170,
+    "h": 2532
+  },
+  "integrations": {
+    "w": 2880,
+    "h": 1800
+  },
+  "inventory": {
+    "w": 2880,
+    "h": 1800
+  },
+  "kitchen": {
+    "w": 2880,
+    "h": 1800
+  },
+  "ledger": {
+    "w": 2880,
+    "h": 1800
+  },
+  "manager": {
+    "w": 1170,
+    "h": 2532
+  },
+  "pos": {
+    "w": 2880,
+    "h": 1800
+  },
+  "pos-floor": {
+    "w": 1536,
+    "h": 896
+  },
+  "pos-tables": {
+    "w": 2880,
+    "h": 1800
+  },
+  "printers": {
+    "w": 2880,
+    "h": 1800
+  },
+  "procurement-bills": {
+    "w": 2880,
+    "h": 1800
+  },
+  "procurement-grn": {
+    "w": 2880,
+    "h": 1800
+  },
+  "procurement-payments": {
+    "w": 2880,
+    "h": 1800
+  },
+  "procurement-po": {
+    "w": 2880,
+    "h": 1800
+  },
+  "recipes": {
+    "w": 2880,
+    "h": 1800
+  },
+  "reports": {
+    "w": 2880,
+    "h": 1800
+  },
+  "staff": {
+    "w": 2880,
+    "h": 1800
+  },
+  "tables": {
+    "w": 2880,
+    "h": 1800
+  },
+  "wastage": {
+    "w": 2880,
+    "h": 1800
+  }
+}

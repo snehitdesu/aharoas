@@ -1,0 +1,22 @@
+{
+  "version": "1.0.0-rc.1",
+  "generatedAt": "2026-10-05",
+  "windows": {
+    "installer": {
+      "file": "RESTORA-Setup-1.0.0-rc.1.exe",
+      "bytes": 132489831,
+      "sha256": "b97c05e893334d5fc130813e807bf0f5e00d27babdf95f2df7ec4ad627b16dd9",
+      "builtAt": "2026-10-05"
+    },
+    "portable": {
+      "file": "RESTORA-Portable-1.0.0-rc.1.exe",
+      "bytes": 132277172,
+      "sha256": "b15743a6023ace1daabf02be93156cbd55d96053a5a3f6ada9ed3e74ca579e35",
+      "builtAt": "2026-10-05"
+    }
+  },
+  "mac": {
+    "arm64": null,
+    "x64": null
+  }
+}
