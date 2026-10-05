@@ -30,6 +30,20 @@ on first launch. To sign and notarize: GitHub secrets `MAC_CSC_LINK` /
 `desktop-macos` job; verify with `codesign --verify --deep --strict` and
 `spctl -a -vv dist-desktop/mac-arm64/RESTORA.app`.
 
+**Unsigned (local / ad-hoc) builds and the fuses.** Electron's macOS binaries
+ship linker-signed ad-hoc (no team ID, no hardened runtime). Flipping the Electron
+fuses rewrites bytes in `Electron Framework`, so without a re-seal the first fuse
+read is killed by the kernel on Apple Silicon (`EXC_BAD_ACCESS (SIGKILL (Code
+Signature Invalid))` in `electron::fuses::IsRunAsNodeEnabled`).
+`electronFuses.resetAdHocDarwinSignature: true` re-applies an ad-hoc signature
+to the whole bundle right after the fuses are flipped; with a Developer ID
+electron-builder then signs over it (hardened runtime + `desktop/mac/entitlements.mac.plist`).
+`npm run desktop:verify` on a Mac checks `codesign --verify --deep --strict`.
+A locally built app carries no quarantine flag and opens normally; a copy
+downloaded from the internet is quarantined, and since macOS 15 an unsigned app
+must be allowed once in System Settings → Privacy & Security → "Open Anyway"
+(right-click → Open no longer bypasses Gatekeeper). Never disable Gatekeeper or SIP.
+
 Manual macOS check (on a Mac): `npm ci && npm run desktop:build && npm run desktop:e2e
 && npx electron-builder --mac --dir --publish never && npm run desktop:verify &&
 npx electron-builder --mac --publish never`, then open the DMG, drag RESTORA to

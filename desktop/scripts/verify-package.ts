@@ -4,6 +4,9 @@
  * once its fuses are flipped (it needs --inspect):
  *
  *  1. fuses   — the security fuses in electron-builder.yml are set in the exe;
+ *              macOS: the bundle's code signature is still valid after the fuses
+ *              were flipped (Apple Silicon kills a binary whose pages no longer
+ *              match its signature);
  *  2. upgrade — a restaurant database from the previous release (ad547ae, 9
  *               migrations, real rows) is upgraded by the real binary on start:
  *               verified pre-migration backup, data intact, Owner signs in over
@@ -126,6 +129,17 @@ async function verifyFuses() {
     ["EnableEmbeddedAsarIntegrityValidation", FuseV1Options.EnableEmbeddedAsarIntegrityValidation, FuseState.ENABLE],
   ];
   for (const [name, opt, state] of want) check(`fuse ${name}`, (wire as unknown as Record<number, number>)[opt] === state, `expected ${state === FuseState.ENABLE ? "enabled" : "disabled"}`);
+  if (isMac) {
+    let detail = "valid on disk, satisfies its Designated Requirement";
+    let ok = true;
+    try {
+      execFileSync("codesign", ["--verify", "--deep", "--strict", "--verbose=2", unpacked], { stdio: "pipe" });
+    } catch (e) {
+      ok = false;
+      detail = String((e as { stderr?: Buffer }).stderr ?? e).trim().split("\n").slice(-3).join(" | ").slice(0, 300);
+    }
+    check("macOS code signature is valid after the fuses were flipped (codesign --verify --deep --strict)", ok, detail);
+  }
 }
 
 // ---------------- 2. upgrade a previous-release restaurant ----------------

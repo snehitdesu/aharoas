@@ -40,6 +40,15 @@ electronFuses:
   # Only app.asar is loaded, and its contents must match the hash embedded in the exe.
   onlyLoadAppFromAsar: true
   enableEmbeddedAsarIntegrityValidation: true
+  # macOS: flipping fuses rewrites bytes inside "Electron Framework", which breaks
+  # the linker ad-hoc signature Electron ships with (flags 0x20002: ad-hoc, no
+  # hardened runtime, no team ID). Apple Silicon kills the app on the first fuse
+  # read ("Code Signature Invalid", in electron::fuses::IsRunAsNodeEnabled) unless
+  # the bundle is re-sealed. This re-applies an ad-hoc signature to the whole .app
+  # right after the fuses are flipped (codesign --sign - --force --deep, keeping
+  # the existing flags). A Developer ID build is then signed over it as usual;
+  # Windows is unaffected (only applied to .app paths).
+  resetAdHocDarwinSignature: true
   # grantFileProtocolExtraPrivileges stays at Electron's default (on): the splash
   # and first-run setup pages are file:// pages inside app.asar, which cannot load
   # with it off (verified: ERR_FILE_NOT_FOUND). Those pages may only reach their
