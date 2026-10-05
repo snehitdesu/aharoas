@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { BrandMark } from "@/components/layout/BrandMark";
+import { RestoraLogo } from "@/site/components/Logo";
 import { FOOTER, SITE_TAGLINE } from "@/site/config";
 import { release } from "@/site/release";
 
@@ -9,9 +9,8 @@ export function SiteFooter() {
       <div className="s-wrap pb-10 pt-20">
         <div className="grid gap-12 lg:grid-cols-[1.2fr_2fr]">
           <div>
-            <Link href="/" className="inline-flex items-center gap-2.5 no-underline" aria-label="RESTORA home">
-              <BrandMark className="h-9 w-9" decorative />
-              <span className="font-display text-xl font-bold tracking-[0.14em] text-[color:var(--s-on-dark)]">RESTORA</span>
+            <Link href="/" className="inline-flex no-underline" aria-label="RESTORA home">
+              <RestoraLogo tone="ivory" size="lg" />
             </Link>
             <p className="mt-4 max-w-xs font-display text-2xl leading-tight text-[color:var(--s-on-dark)]">{SITE_TAGLINE}.</p>
           </div>

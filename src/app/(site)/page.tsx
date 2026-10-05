@@ -1,7 +1,9 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { Screen } from "@/site/components/Screen";
-import { FlowStory, type FlowStep } from "@/site/components/FlowStory";
+import { ChainStack, type ChainCard } from "@/site/components/ChainStack";
+import { ScrollProgress } from "@/site/components/ScrollProgress";
+import { Statement } from "@/site/components/Statement";
 import { RoleSwitcher } from "@/site/components/RoleSwitcher";
 import { ProductDemo } from "@/site/components/ProductDemo";
 import { PlatformDownload } from "@/site/components/PlatformDownload";
@@ -9,15 +11,69 @@ import { MoreLink, SectionIntro } from "@/site/components/Section";
 import { INTEGRATIONS, SOLUTIONS, STATUS_LABEL } from "@/site/content";
 import { downloadState } from "@/site/release";
 import { WEB_APP_PATH } from "@/site/config";
+import { RestoraMark } from "@/site/components/Logo";
 
-const FLOW: FlowStep[] = [
-  { key: "qr", label: "Table QR", screen: "guest-cart", title: "A guest scans the table and orders.", body: "Each table has its own QR code. Guests open the live menu on their phone, build a cart and place the order. Staff accept it, or the guest pays online first." },
-  { key: "pos", label: "POS", screen: "pos", title: "Staff order at the POS or on the floor.", body: "Cashiers use the POS; captains take rounds on their phone. Every order is tied to its table, covers and customer, with modifiers and discounts." },
-  { key: "kot", label: "KOT and KDS", screen: "kitchen", title: "The kitchen gets one ticket per station.", body: "Sending an order creates a KOT for each station: kitchen, bakery or bar. The kitchen display moves it from new to in progress to ready, and the captain app shows it." },
-  { key: "pay", label: "Payment", screen: "manager", title: "Settle by cash, UPI, card or online.", body: "Split and partial payments, refunds and bills, with GST-ready invoices numbered without gaps for each financial year. Managers see the day's takings live." },
-  { key: "stock", label: "Inventory", screen: "ledger", title: "Every sale draws down stock by recipe.", body: "When an order is settled, RESTORA consumes the ingredients in its approved recipe and writes the movement to an append-only ledger at weighted average cost." },
-  { key: "insight", label: "Analytics", screen: "analytics-sales", title: "The numbers come from the same records.", body: "Sales, menu, inventory and finance analytics read the orders, payments and stock movements the restaurant already recorded. Nothing is re-entered." },
+const WIDE = "(min-width: 1280px) 720px, (min-width: 1024px) 56vw, 100vw";
+
+const CHAIN: ChainCard[] = [
+  {
+    key: "qr",
+    label: "Table QR",
+    title: "A guest scans the table and orders.",
+    body: "Each table has its own QR code. Guests open the live menu on their phone, build a cart and place the order. Staff accept it, or the guest pays online first.",
+    media: (
+      <div className="s-duo">
+        <Screen name="guest-menu" sizes="(min-width: 1024px) 260px, 44vw" />
+        <Screen name="guest-cart" sizes="(min-width: 1024px) 260px, 44vw" />
+      </div>
+    ),
+  },
+  {
+    key: "pos",
+    label: "POS",
+    title: "Staff order at the POS or on the floor.",
+    body: "Cashiers use the POS; captains take rounds on their phone. Every order is tied to its table, covers and customer, with modifiers and discounts.",
+    media: <Screen name="pos" sizes={WIDE} />,
+  },
+  {
+    key: "kot",
+    label: "KOT and KDS",
+    tone: "espresso",
+    title: "The kitchen gets one ticket per station.",
+    body: "Sending an order creates a KOT for each station: kitchen, bakery or bar. The kitchen display moves it from new to in progress to ready, and the captain app shows it.",
+    media: <Screen name="kitchen" sizes={WIDE} />,
+  },
+  {
+    key: "pay",
+    label: "Payment",
+    tone: "sand",
+    title: "Settle by cash, UPI, card or online.",
+    body: "Split and partial payments, refunds and bills, with GST-ready invoices numbered without gaps for each financial year. Managers see the day's takings live.",
+    media: (
+      <div className="s-pair">
+        <Screen name="finance" className="w-full" sizes={WIDE} />
+        <Screen name="manager" sizes="(min-width: 1024px) 190px, 26vw" />
+      </div>
+    ),
+  },
+  {
+    key: "stock",
+    label: "Inventory",
+    title: "Every sale draws down stock by recipe.",
+    body: "When an order is settled, RESTORA consumes the ingredients in its approved recipe and writes the movement to an append-only ledger at weighted average cost.",
+    media: <Screen name="ledger" sizes={WIDE} />,
+  },
+  {
+    key: "insight",
+    label: "Analytics",
+    title: "The numbers come from the same records.",
+    body: "Sales, menu, inventory and finance analytics read the orders, payments and stock movements the restaurant already recorded. Nothing is re-entered.",
+    media: <Screen name="analytics-sales" sizes={WIDE} />,
+  },
 ];
+
+const RAIL = ["Guest", "Order", "KOT", "Kitchen", "Payment", "Stock", "Books", "Numbers"];
+const delay = (ms: number) => ({ "--delay": `${ms}ms` }) as React.CSSProperties;
 
 const WHY = [
   { title: "One connected system", body: "Orders, kitchen, stock, purchasing, money and reports share one database. A sale is entered once and every module sees it." },
@@ -36,65 +92,128 @@ export default function HomePage() {
   return (
     <>
       {/* ---------------- Hero ---------------- */}
-      <section aria-labelledby="hero-title" className="relative pt-14 sm:pt-20 lg:pt-24">
+      <section aria-labelledby="hero-title" className="s-hero">
         <div className="s-wrap">
-          <p className="s-eyebrow">Restaurant management software</p>
-          <h1 id="hero-title" className="s-display mt-5">
-            The operating system <br className="hidden lg:block" />
-            for restaurants<span className="s-accent">.</span>
+          <Link href="/resources/release-notes" className="s-chip s-arrive">
+            <span className="s-chip-tag s-num">{dl.version}</span>
+            <span>
+              <span className="hidden sm:inline">RESTORA for </span>Windows and the web
+            </span>
+            <span className="s-arrow" aria-hidden>
+              →
+            </span>
+          </Link>
+          <h1 id="hero-title" className="s-display s-hero-title mt-8">
+            <span className="s-line">
+              <span style={delay(60)}>The operating system</span>
+            </span>
+            <span className="s-line">
+              <span style={delay(160)}>
+                for restaurants<span className="s-accent">.</span>
+              </span>
+            </span>
           </h1>
-          <div className="mt-8 grid gap-8 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
-            <p className="s-lead max-w-[36rem]">Run orders, kitchen, inventory, procurement, finance, payments and analytics from one connected system.</p>
-            <div className="flex flex-wrap items-center gap-3">
-              <Link href="/product" className="s-btn s-btn-primary">
-                Explore RESTORA
-              </Link>
-              <Link href="/download" className="s-btn s-btn-ghost">
+          <div className="mt-8 grid gap-8 lg:mt-10 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
+            <p className="s-lead s-arrive max-w-[34rem]" style={delay(320)}>
+              Orders, kitchen, stock, purchasing, money and reports in one connected system. Enter a sale once and every part of the restaurant sees it.
+            </p>
+            <div className="s-arrive flex flex-wrap items-center gap-3" style={delay(420)}>
+              <Link href="/download" className="s-btn s-btn-primary">
                 Download RESTORA
               </Link>
+              <Link href="/product" className="s-btn s-btn-ghost">
+                Explore RESTORA
+              </Link>
               <Link href="#demo" className="s-link ml-1 py-3">
-                See RESTORA in action <span className="s-arrow" aria-hidden>→</span>
+                See it in action <span className="s-arrow" aria-hidden>→</span>
               </Link>
             </div>
           </div>
         </div>
 
-        <div className="s-wrap mt-14 sm:mt-20">
-          <div className="relative pb-[12%] sm:pb-[6%]">
-            <Screen name="pos" priority className="w-full" sizes="(min-width: 1280px) 1216px, 100vw" />
-            <Screen name="captain" priority className="absolute bottom-0 right-[3%] w-[30%] max-w-[15.5rem] sm:right-[4%] sm:w-[19%]" sizes="(min-width: 1280px) 248px, 30vw" />
+        <ScrollProgress className="s-stage s-wrap" start={0.9} end={0} minWidth={1024}>
+          <div className="s-stage-grid">
+            <div className="s-layer s-layer-kitchen s-arrive hidden lg:block" style={delay(640)}>
+              <Screen name="kitchen" className="w-full" sizes="(min-width: 1024px) 560px, 1px" />
+            </div>
+            <div className="s-layer s-layer-main s-arrive" style={delay(480)}>
+              <Screen name="pos" priority className="w-full" sizes="(min-width: 1280px) 980px, (min-width: 1024px) 76vw, 100vw" />
+            </div>
+            <div className="s-layer s-layer-guest s-arrive hidden lg:block" style={delay(780)}>
+              <Screen name="guest-cart" className="w-full" sizes="(min-width: 1024px) 180px, 1px" />
+            </div>
+            <div className="s-layer s-layer-captain s-arrive" style={delay(880)}>
+              <Screen name="captain" className="w-full" sizes="(min-width: 1024px) 180px, 30vw" />
+            </div>
           </div>
-          <p className="s-caption">The RESTORA POS and the captain app, showing sample data.</p>
+        </ScrollProgress>
+
+        <div className="s-wrap mt-12 lg:mt-16">
+          <p className="s-caption m-0">Real RESTORA screens with sample data: the POS, the kitchen display, a guest menu and the captain app.</p>
+          <div className="mt-12 border-y border-[color:var(--s-rule)] py-6">
+            <ol className="s-rail s-reveal" aria-label="What one order sets off">
+              {RAIL.map((r, i) => (
+                <li key={r} style={{ "--i": i } as React.CSSProperties}>
+                  {i === 0 ? <span>{r}</span> : r}
+                </li>
+              ))}
+            </ol>
+          </div>
         </div>
       </section>
 
-      {/* ---------------- The restaurant runs through RESTORA ---------------- */}
-      <section aria-labelledby="flow-title" className="s-section">
+      {/* ---------------- Statement ---------------- */}
+      <section aria-labelledby="statement-title" className="s-section">
         <div className="s-wrap">
-          <SectionIntro id="flow-title" eyebrow="One connected system" title="The restaurant runs through RESTORA." lead="Follow one order from the table to the numbers. Each step is a part of RESTORA, and each one hands its work to the next." />
-          <div className="mt-12 lg:mt-4">
-            <FlowStory steps={FLOW} />
+          <h2 id="statement-title" className="s-eyebrow">
+            One connected system
+          </h2>
+          <Statement
+            className="mt-8"
+            text="One order sets the whole restaurant in motion. The *kitchen* gets its ticket. The *store* records what was used. The *books* take the payment. The *manager* sees the number. Nobody types it twice."
+          />
+        </div>
+      </section>
+
+      {/* ---------------- The chain (signature card stack) ---------------- */}
+      <section aria-labelledby="chain-title" className="pb-[var(--s-section)]">
+        <div className="s-wrap">
+          <SectionIntro id="chain-title" eyebrow="Follow one order" align="split" title="From the table to the numbers." lead="Six steps, six parts of RESTORA. Each one hands its work to the next, so nothing is carried across by hand." />
+          <div className="mt-14 lg:mt-20">
+            <ChainStack cards={CHAIN} label="How one order moves through RESTORA" />
           </div>
         </div>
       </section>
 
-      {/* ---------------- POS ---------------- */}
-      <section aria-labelledby="pos-title" className="s-section s-band">
+      {/* ---------------- Front of house: full-bleed POS ---------------- */}
+      <section aria-labelledby="pos-title" className="s-foh s-dark">
         <div className="s-wrap">
-          <SectionIntro id="pos-title" eyebrow="POS" align="split" title="Your restaurant floor. In one view." lead="Pick a table, see who is seated and what is running, add a round and send it to the kitchen. Dine-in, takeaway and delivery from the same screen." />
-          <div className="s-reveal mx-auto mt-14 max-w-5xl">
-            <Screen name="pos-floor" className="w-full" sizes="(min-width: 1024px) 1024px, 100vw" />
+          <div className="grid gap-8 lg:grid-cols-[minmax(0,7fr)_minmax(0,5fr)] lg:items-end lg:gap-16">
+            <div className="s-reveal">
+              <p className="s-eyebrow">Front of house · POS</p>
+              <h2 id="pos-title" className="s-display s-foh-title mt-6">
+                Your floor,
+                <br />
+                in one view<span className="s-accent-on-dark">.</span>
+              </h2>
+            </div>
+            <p className="s-lead s-reveal lg:pb-3">Pick a table, see who is seated and what is running, add a round and send it to the kitchen. Dine-in, takeaway and delivery from the same screen.</p>
           </div>
-          <dl className="s-reveal mt-14 grid gap-x-10 gap-y-8 sm:grid-cols-2 lg:grid-cols-4">
+        </div>
+        <ScrollProgress className="s-wrap s-foh-stage" start={1} end={0.6} minWidth={1024}>
+          <Screen name="pos-floor" className="w-full" sizes="(min-width: 1280px) 1216px, 100vw" />
+        </ScrollProgress>
+        <div className="s-wrap">
+          <dl className="s-facts s-reveal">
             {[
               ["Tables and covers", "Floors and tables with live free or occupied status. Occupied tables open their running order."],
               ["Orders and rounds", "Menu with variants and modifiers, rounds fired to the kitchen, discounts and open orders."],
               ["Payments", "Cash, UPI, card and online. Split and partial payments, and refunds with a manager's confirmation."],
               ["Bills and KOT printing", "Bills and receipts, and KOTs printed to network ESC/POS printers per station."],
-            ].map(([t, d]) => (
-              <div key={t} className="border-t border-[color:var(--s-rule-strong)] pt-5">
-                <dt className="s-h4">{t}</dt>
-                <dd className="s-body mt-2 text-[color:var(--s-muted)]">{d}</dd>
+            ].map(([t, d], i) => (
+              <div key={t} style={{ "--i": i } as React.CSSProperties}>
+                <dt>{t}</dt>
+                <dd>{d}</dd>
               </div>
             ))}
           </dl>
@@ -104,16 +223,22 @@ export default function HomePage() {
         </div>
       </section>
 
-      {/* ---------------- QR ordering ---------------- */}
+      {/* ---------------- QR ordering: editorial split ---------------- */}
       <section aria-labelledby="qr-title" className="s-section overflow-hidden">
-        <div className="s-wrap grid items-center gap-14 lg:grid-cols-2 lg:gap-20">
-          <div>
-            <SectionIntro id="qr-title" eyebrow="QR ordering" compact title="Turn every table into an ordering point." lead="Guests scan the QR code on their table and order from your live menu. The order enters the same engine as the POS, so the kitchen, the bill and the stock all see it." />
-            <ol className="s-reveal mt-10 grid grid-cols-2 gap-x-6 gap-y-5 sm:grid-cols-5">
+        <div className="s-wrap grid items-center gap-14 lg:grid-cols-[minmax(0,6fr)_minmax(0,5fr)] lg:gap-20">
+          <div className="s-qr-phones s-reveal order-2 lg:order-1">
+            <Screen name="guest-menu" sizes="(min-width: 1024px) 280px, 46vw" />
+            <Screen name="guest-cart" sizes="(min-width: 1024px) 280px, 46vw" />
+          </div>
+          <div className="order-1 lg:order-2">
+            <SectionIntro id="qr-title" eyebrow="QR ordering" compact title="Every table is an ordering point." lead="Guests scan the QR code on their table and order from your live menu. The order enters the same engine as the POS, so the kitchen, the bill and the stock all see it." />
+            <ol className="s-numbered s-reveal mt-10">
               {["Scan", "Menu", "Cart", "Order", "Payment"].map((s, i) => (
-                <li key={s} className="border-t-2 border-[color:var(--s-ink)] pt-3">
-                  <span className="s-small s-num block">{String(i + 1).padStart(2, "0")}</span>
-                  <span className="font-semibold text-[color:var(--s-ink)]">{s}</span>
+                <li key={s} style={{ "--i": i } as React.CSSProperties}>
+                  <span className="s-num" aria-hidden>
+                    {String(i + 1).padStart(2, "0")}
+                  </span>
+                  {s}
                 </li>
               ))}
             </ol>
@@ -122,217 +247,180 @@ export default function HomePage() {
               <MoreLink href="/product/qr-ordering">Explore QR ordering</MoreLink>
             </p>
           </div>
-          <div className="s-reveal flex items-end justify-center gap-4 sm:gap-6">
-            <Screen name="guest-menu" className="w-[46%] max-w-[16rem] -translate-y-8" sizes="(min-width: 1024px) 256px, 46vw" />
-            <Screen name="guest-cart" className="w-[46%] max-w-[16rem]" sizes="(min-width: 1024px) 256px, 46vw" />
-          </div>
         </div>
       </section>
 
-      {/* ---------------- Kitchen ---------------- */}
-      <section aria-labelledby="kitchen-title" className="s-section s-dark">
+      {/* ---------------- Kitchen: ticket lifecycle ---------------- */}
+      <section aria-labelledby="kitchen-title" className="s-section s-band">
         <div className="s-wrap">
           <SectionIntro id="kitchen-title" eyebrow="Kitchen" align="split" title="From order to kitchen, without the chaos." lead="Every round becomes a kitchen order ticket for each station that prepares it. The kitchen display moves it along, and the floor sees each change." />
+          <ScrollProgress className="s-ticket-rail" start={0.8} end={0.75} style={{ "--n": 4 } as React.CSSProperties}>
+            <ol aria-label="The life of a kitchen order ticket">
+              {[
+                ["KOT", "One ticket per station, printed automatically if a printer is set up."],
+                ["Accept", "The station takes the ticket. Each one shows table, covers and minutes waiting."],
+                ["Preparing", "In progress until the dish is done."],
+                ["Ready", "The captain app shows it, so food goes out hot."],
+              ].map(([t, d], i) => (
+                <li key={t} style={{ "--i": i } as React.CSSProperties}>
+                  <span className="s-num s-ticket-rail-n">{String(i + 1).padStart(2, "0")}</span>
+                  <span className="s-ticket-rail-t">{t}</span>
+                  <span className="s-ticket-rail-d">{d}</span>
+                </li>
+              ))}
+            </ol>
+          </ScrollProgress>
           <div className="s-reveal mt-14">
             <Screen name="kitchen" className="w-full" sizes="(min-width: 1280px) 1216px, 100vw" />
           </div>
-          <ol className="s-reveal mt-12 grid gap-x-8 gap-y-6 sm:grid-cols-2 lg:grid-cols-4">
-            {[
-              ["KOT", "One ticket per station, printed automatically if a printer is set up."],
-              ["Accept", "The station takes the ticket. Each one shows table, covers and minutes waiting."],
-              ["Preparing", "In progress until the dish is done."],
-              ["Ready", "The captain app shows it, so food goes out hot."],
-            ].map(([t, d], i) => (
-              <li key={t} className="border-t border-[rgb(247_241_230/0.18)] pt-4">
-                <p className="s-num text-sm text-[#f0b39a]">{String(i + 1).padStart(2, "0")}</p>
-                <p className="mt-1 text-lg font-semibold text-[color:var(--s-on-dark)]">{t}</p>
-                <p className="mt-1.5">{d}</p>
-              </li>
-            ))}
-          </ol>
           <p className="mt-12">
             <MoreLink href="/product/kitchen">Explore the kitchen display</MoreLink>
           </p>
         </div>
       </section>
 
-      {/* ---------------- Inventory ---------------- */}
-      <section aria-labelledby="inventory-title" className="s-section">
-        <div className="s-wrap grid items-center gap-14 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] lg:gap-16">
-          <div>
-            <SectionIntro id="inventory-title" eyebrow="Inventory" compact title={<>Know what you have. <br />Know what you use.</>} />
-            <p className="s-lead s-reveal mt-6">Recipes connect the menu to the store. Each settled sale consumes its ingredients, and every movement lands in one ledger.</p>
-            <ul className="s-ticks s-reveal mt-8">
-              <li>Stock on hand with reorder levels and value at weighted average cost</li>
-              <li>Versioned, approved recipes and sub-recipes with plate costing</li>
-              <li>Consumption on every settled sale</li>
-              <li>Wastage with reasons, stock counts with variance</li>
-              <li>Transfers, issues and production batches</li>
-            </ul>
+      {/* ---------------- Back of house: inventory, procurement, finance ---------------- */}
+      <section aria-labelledby="boh-title" className="s-section">
+        <div className="s-wrap">
+          <div className="s-chapter s-reveal">
+            <p className="s-eyebrow">Back of house</p>
+            <h2 id="boh-title" className="s-display s-chapter-title mt-6">
+              The stock, the purchase, the money<span className="s-accent">.</span>
+            </h2>
+            <p className="s-lead mt-8 max-w-2xl">What the guest never sees, kept as carefully as what they do. Recipes, purchase documents and cash all post to the same records as the sale.</p>
+          </div>
+
+          {/* Inventory */}
+          <div className="s-boh-block grid items-center gap-12 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] lg:gap-16">
+            <div>
+              <h3 id="inventory-title" className="s-h3 s-reveal">
+                <span className="s-eyebrow mb-4 block">Inventory</span>
+                Know what you have. Know what you use.
+              </h3>
+              <p className="s-body s-reveal mt-5 text-[1.0625rem]">Recipes connect the menu to the store. Each settled sale consumes its ingredients, and every movement lands in one ledger.</p>
+              <ul className="s-ticks s-reveal mt-7">
+                <li>Stock on hand with reorder levels and value at weighted average cost</li>
+                <li>Versioned, approved recipes and sub-recipes with plate costing</li>
+                <li>Consumption on every settled sale</li>
+                <li>Wastage with reasons, stock counts with variance</li>
+                <li>Transfers, issues and production batches</li>
+              </ul>
+              <p className="mt-8">
+                <MoreLink href="/product/inventory">Explore inventory</MoreLink>
+              </p>
+            </div>
+            <div className="s-overlap s-reveal">
+              <Screen name="recipes" className="s-overlap-back" sizes="(min-width: 1024px) 520px, 80vw" />
+              <Screen name="inventory" className="s-overlap-front" sizes="(min-width: 1280px) 640px, (min-width: 1024px) 50vw, 90vw" />
+            </div>
+          </div>
+
+          {/* Procurement */}
+          <div className="s-boh-block">
+            <div className="grid gap-6 lg:grid-cols-2 lg:items-end lg:gap-16">
+              <h3 id="procurement-title" className="s-h3 s-reveal">
+                <span className="s-eyebrow mb-4 block">Procurement</span>
+                From purchase request to vendor payment.
+              </h3>
+              <p className="s-body s-reveal text-[1.0625rem]">One documented path for everything the restaurant buys. Each document creates the next, and receipts update stock.</p>
+            </div>
+            <ol className="s-slips s-reveal mt-12" aria-label="Procurement documents in order">
+              {[
+                ["Indent", "A department asks for materials"],
+                ["Purchase order", "Sent to the vendor"],
+                ["GRN", "Goods received, posted to stock"],
+                ["Bill", "The vendor's bill, matched to receipts"],
+                ["Vendor payment", "Settles bills, updates dues"],
+              ].map(([t, d], i) => (
+                <li key={t} style={{ "--i": i } as React.CSSProperties}>
+                  <span className="s-num s-slip-n">{String(i + 1).padStart(2, "0")}</span>
+                  <span className="s-slip-t">{t}</span>
+                  <span className="s-slip-d">{d}</span>
+                </li>
+              ))}
+            </ol>
+            <div className="s-reveal mt-12 grid gap-6 lg:grid-cols-2">
+              <figure>
+                <Screen name="procurement-po" className="w-full" sizes="(min-width: 1024px) 600px, 100vw" />
+                <figcaption className="s-caption">Purchase orders by vendor, with receipts and totals.</figcaption>
+              </figure>
+              <figure className="lg:mt-16">
+                <Screen name="procurement-payments" className="w-full" sizes="(min-width: 1024px) 600px, 100vw" />
+                <figcaption className="s-caption">Vendor dues: outstanding, overdue and paid.</figcaption>
+              </figure>
+            </div>
             <p className="mt-10">
-              <MoreLink href="/product/inventory">Explore inventory</MoreLink>
+              <MoreLink href="/product/procurement">Explore procurement</MoreLink>
             </p>
           </div>
-          <div className="s-reveal">
-            <Screen name="inventory" className="w-full" sizes="(min-width: 1280px) 720px, (min-width: 1024px) 58vw, 100vw" />
+
+          {/* Finance */}
+          <div className="s-boh-block grid items-center gap-12 lg:grid-cols-[minmax(0,7fr)_minmax(0,5fr)] lg:gap-16">
+            <div className="s-reveal order-2 lg:order-1">
+              <Screen name="finance" className="w-full" sizes="(min-width: 1280px) 720px, (min-width: 1024px) 58vw, 100vw" />
+            </div>
+            <div className="order-1 lg:order-2">
+              <h3 id="finance-title" className="s-h3 s-reveal">
+                <span className="s-eyebrow mb-4 block">Finance</span>
+                From every payment to every rupee.
+              </h3>
+              <p className="s-body s-reveal mt-5 text-[1.0625rem]">Payments, invoices, expenses and cash in one place. Close the day against counted cash and read profit and loss for any period.</p>
+              <ul className="s-ticks s-reveal mt-7">
+                <li>GST-ready invoices and credit notes, numbered without gaps per financial year</li>
+                <li>Payments and refunds by method, with gateway reconciliation</li>
+                <li>Expenses and petty cash</li>
+                <li>Cash drawer: float, expected, counted, variance</li>
+                <li>Daily closing, profit and loss, vendor dues</li>
+                <li>CSV and Tally XML export for your accountant</li>
+              </ul>
+              <p className="s-small s-reveal mt-6">GST-ready records, not certified e-invoicing: there is no IRN or GSTR filing.</p>
+              <p className="mt-8">
+                <MoreLink href="/product/finance">Explore finance</MoreLink>
+              </p>
+            </div>
           </div>
         </div>
       </section>
 
-      {/* ---------------- Procurement ---------------- */}
-      <section aria-labelledby="procurement-title" className="s-section s-band">
+      {/* ---------------- Analytics: data moment ---------------- */}
+      <section aria-labelledby="analytics-title" className="s-section s-dark s-data">
         <div className="s-wrap">
-          <SectionIntro id="procurement-title" eyebrow="Procurement" title="From purchase request to vendor payment." lead="One documented path for everything the restaurant buys. Each document creates the next, and receipts update stock." />
-          <ol className="s-reveal mt-12 grid grid-cols-1 overflow-hidden rounded-[var(--s-radius)] bg-[color:var(--s-surface)] shadow-[0_0_0_1px_rgb(36_24_15/0.1)] sm:grid-cols-5">
-            {[
-              ["Indent", "A department asks for materials"],
-              ["Purchase order", "Sent to the vendor"],
-              ["GRN", "Goods received, posted to stock"],
-              ["Bill", "The vendor's bill, matched to receipts"],
-              ["Vendor payment", "Settles bills, updates dues"],
-            ].map(([t, d], i) => (
-              <li key={t} className="border-b border-[color:var(--s-rule)] p-5 last:border-0 sm:border-b-0 sm:border-r">
-                <p className="s-num text-sm font-semibold text-[color:var(--s-accent-ink)]">{String(i + 1).padStart(2, "0")}</p>
-                <p className="mt-1 text-lg font-semibold text-[color:var(--s-ink)]">{t}</p>
-                <p className="s-small mt-1">{d}</p>
-              </li>
-            ))}
-          </ol>
-          <div className="s-reveal mt-10 grid gap-6 lg:grid-cols-2">
-            <figure>
-              <Screen name="procurement-po" className="w-full" sizes="(min-width: 1024px) 600px, 100vw" />
-              <figcaption className="s-caption">Purchase orders by vendor, with receipts and totals.</figcaption>
-            </figure>
-            <figure>
-              <Screen name="procurement-payments" className="w-full" sizes="(min-width: 1024px) 600px, 100vw" />
-              <figcaption className="s-caption">Vendor dues: outstanding, overdue and paid.</figcaption>
-            </figure>
+          <div className="grid gap-12 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] lg:gap-16">
+            <div className="lg:sticky lg:top-28 lg:self-start">
+              <SectionIntro id="analytics-title" eyebrow="Analytics" compact title="Understand your restaurant." lead="Analytics read the records RESTORA already keeps, so the answers are there without a spreadsheet." />
+              <p className="mt-10">
+                <MoreLink href="/product/analytics">Explore analytics</MoreLink>
+              </p>
+            </div>
+            <ol className="s-questions">
+              {[
+                ["What is selling?", "Best sellers by quantity and revenue."],
+                ["What is moving slowly?", "Slow sellers and items with no sales."],
+                ["What is being wasted?", "Wastage by material, reason and value."],
+                ["What are sales doing?", "Net sales, orders and average order value by day."],
+                ["What are expenses doing?", "Expenses by category in the profit and loss."],
+                ["What do we owe vendors?", "Dues and overdue amounts per vendor."],
+              ].map(([q, a]) => (
+                <li key={q} className="s-reveal">
+                  <p className="s-question">{q}</p>
+                  <p className="s-answer">{a}</p>
+                </li>
+              ))}
+            </ol>
           </div>
-          <p className="mt-12">
-            <MoreLink href="/product/procurement">Explore procurement</MoreLink>
-          </p>
-        </div>
-      </section>
-
-      {/* ---------------- Finance ---------------- */}
-      <section aria-labelledby="finance-title" className="s-section">
-        <div className="s-wrap grid items-center gap-14 lg:grid-cols-[minmax(0,7fr)_minmax(0,5fr)] lg:gap-16">
-          <div className="s-reveal order-2 lg:order-1">
-            <Screen name="finance" className="w-full" sizes="(min-width: 1280px) 720px, (min-width: 1024px) 58vw, 100vw" />
-          </div>
-          <div className="order-1 lg:order-2">
-            <SectionIntro id="finance-title" eyebrow="Finance" compact title="From every payment to every rupee." />
-            <p className="s-lead s-reveal mt-6">Payments, invoices, expenses and cash in one place. Close the day against counted cash and read profit and loss for any period.</p>
-            <ul className="s-ticks s-reveal mt-8">
-              <li>GST-ready invoices and credit notes, numbered without gaps per financial year</li>
-              <li>Payments and refunds by method, with gateway reconciliation</li>
-              <li>Expenses and petty cash</li>
-              <li>Cash drawer: float, expected, counted, variance</li>
-              <li>Daily closing, profit and loss, vendor dues</li>
-              <li>CSV and Tally XML export for your accountant</li>
-            </ul>
-            <p className="s-small s-reveal mt-6">GST-ready records, not certified e-invoicing: there is no IRN or GSTR filing.</p>
-            <p className="mt-10">
-              <MoreLink href="/product/finance">Explore finance</MoreLink>
-            </p>
-          </div>
-        </div>
-      </section>
-
-      {/* ---------------- Analytics ---------------- */}
-      <section aria-labelledby="analytics-title" className="s-section s-band">
-        <div className="s-wrap">
-          <SectionIntro id="analytics-title" eyebrow="Analytics" align="split" title="Understand your restaurant." lead="Analytics read the records RESTORA already keeps, so the answers are there without a spreadsheet." />
-          <ul className="s-reveal mt-12 grid gap-x-10 gap-y-6 sm:grid-cols-2 lg:grid-cols-3">
-            {[
-              ["What is selling?", "Best sellers by quantity and revenue."],
-              ["What is moving slowly?", "Slow sellers and items with no sales."],
-              ["What is being wasted?", "Wastage by material, reason and value."],
-              ["What are sales doing?", "Net sales, orders and average order value by day."],
-              ["What are expenses doing?", "Expenses by category in the profit and loss."],
-              ["What do we owe vendors?", "Dues and overdue amounts per vendor."],
-            ].map(([q, a]) => (
-              <li key={q} className="border-t border-[color:var(--s-rule-strong)] pt-4">
-                <p className="font-display text-xl font-semibold text-[color:var(--s-ink)]">{q}</p>
-                <p className="s-small mt-1">{a}</p>
-              </li>
-            ))}
-          </ul>
-          <div className="s-reveal mt-14">
+          <div className="s-reveal mt-20">
             <Screen name="analytics-menu" className="w-full" sizes="(min-width: 1280px) 1216px, 100vw" />
           </div>
-          <p className="mt-12">
-            <MoreLink href="/product/analytics">Explore analytics</MoreLink>
-          </p>
         </div>
       </section>
 
       {/* ---------------- Staff ---------------- */}
       <section aria-labelledby="staff-title" className="s-section">
         <div className="s-wrap">
-          <SectionIntro id="staff-title" eyebrow="Staff" title={<>One system. <br className="hidden sm:block" />Every role.</>} lead="Choose a role to see the screen that person works in." />
+          <SectionIntro id="staff-title" eyebrow="Staff" align="split" title={<>One system. <br className="hidden sm:block" />Every role.</>} lead="Choose a role to see the screen that person works in." />
           <div className="s-reveal mt-12">
             <RoleSwitcher />
           </div>
-        </div>
-      </section>
-
-      {/* ---------------- Integrations ---------------- */}
-      <section aria-labelledby="integrations-title" className="s-section s-band">
-        <div className="s-wrap">
-          <SectionIntro id="integrations-title" eyebrow="Integrations" align="split" title="Connect RESTORA to the tools around your restaurant." lead="Every connection is labelled with its real status. Mock adapters are for testing and are refused in production." />
-          <div className="s-reveal mt-12 overflow-hidden rounded-[var(--s-radius)] bg-[color:var(--s-surface)] shadow-[0_0_0_1px_rgb(36_24_15/0.1)]">
-            <table className="w-full text-left">
-              <caption className="sr-only">RESTORA integrations and their status</caption>
-              <thead className="hidden text-sm text-[color:var(--s-muted)] md:table-header-group">
-                <tr className="border-b border-[color:var(--s-rule)]">
-                  <th scope="col" className="px-6 py-3 font-medium">Integration</th>
-                  <th scope="col" className="px-6 py-3 font-medium">Status</th>
-                  <th scope="col" className="px-6 py-3 font-medium">What it does today</th>
-                </tr>
-              </thead>
-              <tbody>
-                {INTEGRATIONS.map((x) => (
-                  <tr key={x.name} className="block border-b border-[color:var(--s-rule)] px-6 py-5 last:border-0 md:table-row md:p-0">
-                    <th scope="row" className="block font-normal md:table-cell md:px-6 md:py-5 md:align-top">
-                      <span className="block font-semibold text-[color:var(--s-ink)]">{x.name}</span>
-                      <span className="s-small">{x.kind}</span>
-                    </th>
-                    <td className="mt-2 flex flex-wrap gap-3 md:table-cell md:px-6 md:py-5 md:align-top">
-                      {x.status.map((s) => (
-                        <span key={s} className="s-status mr-3" data-s={s}>
-                          {STATUS_LABEL[s]}
-                        </span>
-                      ))}
-                    </td>
-                    <td className="mt-2 block text-[0.9375rem] md:table-cell md:px-6 md:py-5 md:align-top">{x.detail}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <p className="s-small s-reveal mt-5">Live: works with real accounts or devices. Sandbox: test credentials. Mock: simulated, for testing only. Coming later: not available yet.</p>
-          <p className="mt-10">
-            <MoreLink href="/product/integrations">Explore integrations</MoreLink>
-          </p>
-        </div>
-      </section>
-
-      {/* ---------------- Restaurant types ---------------- */}
-      <section aria-labelledby="solutions-title" className="s-section">
-        <div className="s-wrap">
-          <SectionIntro id="solutions-title" eyebrow="Solutions" title="Built for how your restaurant works." />
-          <ul className="s-reveal mt-12">
-            {SOLUTIONS.map((s) => (
-              <li key={s.name} className="grid gap-3 border-t border-[color:var(--s-rule-strong)] py-7 md:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] md:gap-10">
-                <h3 className="font-display text-2xl font-semibold leading-tight text-[color:var(--s-ink)] sm:text-3xl">{s.name}</h3>
-                <p className="s-body text-[1.0625rem]">{s.body}</p>
-              </li>
-            ))}
-          </ul>
-          <p className="mt-8">
-            <MoreLink href="/solutions">See how each one uses RESTORA</MoreLink>
-          </p>
         </div>
       </section>
 
@@ -346,74 +434,105 @@ export default function HomePage() {
         </div>
       </section>
 
-      {/* ---------------- Why RESTORA ---------------- */}
-      <section aria-labelledby="why-title" className="s-section">
+      {/* ---------------- Solutions ---------------- */}
+      <section aria-labelledby="solutions-title" className="s-section">
         <div className="s-wrap">
-          <SectionIntro id="why-title" eyebrow="Why RESTORA" title="More than a billing app." />
-          <ol className="s-reveal mt-12 grid gap-x-12 gap-y-10 md:grid-cols-2 lg:grid-cols-3">
-            {WHY.map((w, i) => (
-              <li key={w.title}>
-                <p className="s-num font-display text-5xl font-semibold text-[color:var(--s-accent)]">{String(i + 1).padStart(2, "0")}</p>
-                <h3 className="s-h4 mt-4 text-xl">{w.title}</h3>
-                <p className="s-body mt-2">{w.body}</p>
+          <SectionIntro id="solutions-title" eyebrow="Solutions" title="Built for how your restaurant works." />
+          <ul className="s-solutions s-reveal mt-12">
+            {SOLUTIONS.map((s, i) => (
+              <li key={s.name}>
+                <span className="s-num s-solutions-n" aria-hidden>
+                  {String(i + 1).padStart(2, "0")}
+                </span>
+                <h3>{s.name}</h3>
+                <p>{s.body}</p>
               </li>
             ))}
-          </ol>
-        </div>
-      </section>
-
-      {/* ---------------- Download ---------------- */}
-      <section aria-labelledby="download-title" className="s-section s-band">
-        <div className="s-wrap">
-          <SectionIntro id="download-title" eyebrow="Download" align="split" title="Get RESTORA." lead="Bring the restaurant operating system to your desktop, or open it in the browser." />
-          <div className="s-reveal mt-12">
-            <PlatformDownload {...dl} webHref={WEB_APP_PATH} compact />
-          </div>
+          </ul>
           <p className="mt-10">
-            <MoreLink href="/download">Release details, checksums and requirements</MoreLink>
+            <MoreLink href="/solutions">See how each one uses RESTORA</MoreLink>
           </p>
         </div>
       </section>
 
-      {/* ---------------- Resources ---------------- */}
-      <section aria-labelledby="resources-title" className="s-section">
+      {/* ---------------- Why RESTORA + integrations ---------------- */}
+      <section aria-labelledby="why-title" className="s-section s-band">
         <div className="s-wrap">
-          <SectionIntro id="resources-title" eyebrow="Resources" title="Learn more." />
-          <ul className="s-reveal mt-10 grid gap-x-10 sm:grid-cols-2 lg:grid-cols-4">
-            {[
-              ["/resources/release-notes", "Release notes", `What is in RESTORA ${dl.version}, and its known limits.`],
-              ["/download#requirements", "System requirements", "What the desktop app and web app need."],
-              ["/security", "Security", "How RESTORA protects accounts, payments and data."],
-              ["/resources", "All resources", "Guides, product pages and legal documents."],
-            ].map(([href, t, d]) => (
-              <li key={href} className="border-t border-[color:var(--s-rule-strong)]">
-                <Link href={href} className="group block py-6 no-underline">
-                  <span className="flex items-center justify-between text-lg font-semibold text-[color:var(--s-ink)]">
-                    {t} <span className="s-accent transition-transform group-hover:translate-x-1" aria-hidden>→</span>
-                  </span>
-                  <span className="s-small mt-1 block">{d}</span>
-                </Link>
+          <SectionIntro id="why-title" eyebrow="Why RESTORA" align="split" title="More than a billing app." lead="The decisions underneath the screens: one database, reconciled money and records that survive a dropped connection." />
+          <ol className="s-principles s-reveal mt-14">
+            {WHY.map((w, i) => (
+              <li key={w.title}>
+                <span className="s-num" aria-hidden>
+                  {String(i + 1).padStart(2, "0")}
+                </span>
+                <h3>{w.title}</h3>
+                <p>{w.body}</p>
               </li>
             ))}
-          </ul>
+          </ol>
+
+          <div id="integrations" className="mt-24 scroll-mt-20">
+            <div className="grid gap-6 lg:grid-cols-2 lg:items-end lg:gap-16">
+              <h3 id="integrations-title" className="s-h3 s-reveal">
+                <span className="s-eyebrow mb-4 block">Integrations</span>
+                Connect RESTORA to the tools around your restaurant.
+              </h3>
+              <p className="s-body s-reveal text-[1.0625rem]">Every connection is labelled with its real status. Mock adapters are for testing and are refused in production.</p>
+            </div>
+            <div className="s-reveal mt-10 overflow-hidden rounded-[var(--s-radius)] bg-[color:var(--s-surface)] shadow-[0_0_0_1px_rgb(36_24_15/0.1)]">
+              <table className="w-full text-left">
+                <caption className="sr-only">RESTORA integrations and their status</caption>
+                <thead className="hidden text-sm text-[color:var(--s-muted)] md:table-header-group">
+                  <tr className="border-b border-[color:var(--s-rule)]">
+                    <th scope="col" className="px-6 py-3 font-medium">Integration</th>
+                    <th scope="col" className="px-6 py-3 font-medium">Status</th>
+                    <th scope="col" className="px-6 py-3 font-medium">What it does today</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {INTEGRATIONS.map((x) => (
+                    <tr key={x.name} className="block border-b border-[color:var(--s-rule)] px-6 py-5 last:border-0 md:table-row md:p-0">
+                      <th scope="row" className="block font-normal md:table-cell md:px-6 md:py-5 md:align-top">
+                        <span className="block font-semibold text-[color:var(--s-ink)]">{x.name}</span>
+                        <span className="s-small">{x.kind}</span>
+                      </th>
+                      <td className="mt-2 flex flex-wrap gap-3 md:table-cell md:px-6 md:py-5 md:align-top">
+                        {x.status.map((s) => (
+                          <span key={s} className="s-status mr-3" data-s={s}>
+                            {STATUS_LABEL[s]}
+                          </span>
+                        ))}
+                      </td>
+                      <td className="mt-2 block text-[0.9375rem] md:table-cell md:px-6 md:py-5 md:align-top">{x.detail}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p className="s-small s-reveal mt-5">Live: works with real accounts or devices. Sandbox: test credentials. Mock: simulated, for testing only. Coming later: not available yet.</p>
+            <p className="mt-8">
+              <MoreLink href="/product/integrations">Explore integrations</MoreLink>
+            </p>
+          </div>
         </div>
       </section>
 
-      {/* ---------------- Closing CTA ---------------- */}
-      <section aria-labelledby="cta-title" className="s-section s-dark">
-        <div className="s-wrap text-center">
-          <h2 id="cta-title" className="s-display mx-auto max-w-[14ch]">
-            Your restaurant. One operating system.
-          </h2>
-          <p className="s-lead mx-auto mt-6 max-w-xl">Run the day with RESTORA.</p>
-          <div className="mt-10 flex flex-wrap justify-center gap-3">
-            <Link href="/download" className="s-btn s-btn-light">
-              Download RESTORA
-            </Link>
-            <Link href="/product" className="s-btn s-btn-ghost">
-              Explore the product
-            </Link>
+      {/* ---------------- Finale: download ---------------- */}
+      <section aria-labelledby="download-title" className="s-section s-dark s-finale">
+        <div className="s-wrap">
+          <div className="s-reveal text-center">
+            <RestoraMark tone="ivory" className="mx-auto h-14 w-14" />
+            <h2 id="download-title" className="s-display mx-auto mt-10 max-w-[13ch]">
+              Your restaurant. One operating system<span className="s-accent-on-dark">.</span>
+            </h2>
+            <p className="s-lead mx-auto mt-6 max-w-xl">Install RESTORA on a Windows computer, or open it in the browser.</p>
           </div>
+          <div className="s-reveal s-light-island mt-16">
+            <PlatformDownload {...dl} webHref={WEB_APP_PATH} compact />
+          </div>
+          <p className="mt-10 text-center">
+            <MoreLink href="/download">Release details, checksums and requirements</MoreLink>
+          </p>
         </div>
       </section>
     </>

@@ -5,6 +5,7 @@ import { SiteFooter } from "@/site/components/SiteFooter";
 import { RevealController } from "@/site/components/Reveal";
 import { SITE_DESCRIPTION, SITE_NAME, SITE_TAGLINE, SITE_URL } from "@/site/config";
 import "./site.css";
+import "./site-art.css";
 
 // Website body face (the application itself keeps its own UI font). Self-hosted by next/font.
 const siteSans = Instrument_Sans({ subsets: ["latin"], display: "swap", variable: "--font-site" });
@@ -23,6 +24,7 @@ export const metadata: Metadata = {
   },
   twitter: { card: "summary_large_image", title: `${SITE_NAME}: ${SITE_TAGLINE}`, description: SITE_DESCRIPTION, images: ["/site/og.png"] },
   robots: { index: true, follow: true },
+  icons: { icon: [{ url: "/site/restora-mark.svg", type: "image/svg+xml" }] },
 };
 
 export default function SiteLayout({ children }: { children: React.ReactNode }) {

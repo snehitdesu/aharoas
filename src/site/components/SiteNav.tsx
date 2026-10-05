@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import { BrandMark } from "@/components/layout/BrandMark";
+import { RestoraLogo } from "@/site/components/Logo";
 import { NAV } from "@/site/config";
 
 /** Sticky top navigation. Desktop: horizontal links. Mobile: a disclosure menu (Escape closes, focus returns). */
@@ -39,9 +39,8 @@ export function SiteNav() {
   return (
     <header className="s-nav" data-scrolled={scrolled || open}>
       <nav aria-label="Main" className="s-wrap flex h-16 items-center gap-6">
-        <Link href="/" className="flex items-center gap-2.5 no-underline" aria-label="RESTORA home">
-          <BrandMark className="h-8 w-8" decorative />
-          <span className="font-display text-[1.125rem] font-bold tracking-[0.14em] text-[color:var(--s-ink)]">RESTORA</span>
+        <Link href="/" className="no-underline" aria-label="RESTORA home">
+          <RestoraLogo />
         </Link>
 
         <ul className="ml-2 hidden items-center gap-5 md:flex lg:ml-6 lg:gap-7">

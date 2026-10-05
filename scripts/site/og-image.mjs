@@ -20,7 +20,7 @@ await page.evaluate(() => {
     <div style="width:1200px;height:630px;background:#1f150d;display:grid;grid-template-columns:560px 1fr;overflow:hidden;position:relative">
       <div style="padding:64px 0 64px 72px;display:flex;flex-direction:column;justify-content:space-between">
         <div style="display:flex;align-items:center;gap:14px;color:#f7f1e6;font-family:var(--s-font-display);font-weight:700;letter-spacing:.14em;font-size:26px">
-          ${document.querySelector('a[aria-label="RESTORA home"] svg').outerHTML.replace('class="h-8 w-8"', 'width="44" height="44"')}
+          ${document.querySelector('footer a[aria-label="RESTORA home"] svg').outerHTML.replace('class="s-logo-mark"', 'width="44" height="44"')}
           RESTORA
         </div>
         <div>

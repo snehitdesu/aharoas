@@ -54,5 +54,23 @@ Never run the seed or `demo-state.ts` against real data (both refuse when non-de
 - `npx vitest run tests/site`
 - `node scripts/site/check-site.mjs http://localhost:3100 [--shots=dir] [--reduced]`: every page at 390 to 1920 px wide; fails on horizontal overflow, broken images, console errors, more or less than one `<h1>`, text under 12 px, and internal links that 404.
 
+## Identity
+The website mark is `RestoraMark` / `RestoraLogo` in `src/site/components/Logo.tsx`: a geometric R closed by a terracotta full stop, the same stop the headlines end with. It is drawn from a rectangle, one arc stroke, a parallelogram and a circle on a 32 px grid, so it holds at 16 px and can be rasterized without a font. Tones: `espresso` (light grounds), `ivory` (dark grounds), `mono` (single colour). The favicon is `public/site/restora-mark.svg`.
+
+The application (`src/components/layout/BrandMark.tsx`), the desktop icon (`desktop/scripts/make-icon.mjs`) and the captured product screenshots still carry the previous sunrise mark; moving them to the new mark is a separate, approved step.
+
+## Art direction
+`src/app/(site)/site-art.css` layers the art direction on the `site.css` tokens:
+
+- Homepage rhythm: hero with a layered product stage, a scroll-lit statement, the chain card stack (signature), a full-bleed front-of-house band, an editorial QR split, the kitchen ticket rail, the back-of-house chapter (inventory, procurement slips, finance), a dark analytics band, roles, demo, solutions, principles with integrations, and a dark download finale.
+- Grounds alternate ivory, sand and espresso; consecutive sections never share a layout.
+
 ## Motion
-No animation library. Section reveals (IntersectionObserver, `RevealController`), one sticky scroll story (`FlowStory`, CSS `position: sticky`), and tab cross-fades. Content is visible without JavaScript, and `prefers-reduced-motion` removes all transitions.
+No animation library. Four kinds of motion, one curve (`--s-ease-out`):
+
+- Arrival: CSS keyframes in the hero (`.s-arrive`, `.s-line`) and IntersectionObserver reveals elsewhere (`RevealController`, `.s-reveal`, staggered by `--i`).
+- Progression: `src/site/motion.ts` (`useScrollFrame`) runs at most once per frame while an element is near the viewport and only writes CSS variables; `ScrollProgress` exposes `--p` for the hero stage parallax, the statement, the front-of-house scale and the kitchen rail. Scrolling stays native; nothing is pinned or snapped by script.
+- Focus: `ChainStack` (desktop at least 1024 × 640) is plain CSS `position: sticky` cards with growing top offsets; the script writes `--e` (arrival) and `--d` (cards on top) for a small scale and a dimming veil. Below that size it is a normal sequence.
+- Transition: tab cross-fades and ground changes.
+
+Rules: only `transform`, `translate`, `scale` and `opacity` animate; moving layers get `will-change` only while motion is active; the sticky nav has no `backdrop-filter` (re-blurring moving layers every frame halved the frame rate). Content is visible without JavaScript, and `prefers-reduced-motion` removes arrivals, reveals and every scroll-linked transform while keeping the layout.
