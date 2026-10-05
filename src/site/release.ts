@@ -11,7 +11,13 @@
  *
  * Visitors download through /download/<platform>, a redirect route, so the host
  * can change without touching any page.
+ *
+ * Local development only (`next dev`, no release host configured): the route
+ * streams the built file straight from dist-desktop/ so the download flow can be
+ * tested end to end. Production builds never read the local filesystem.
  */
+import fs from "node:fs";
+import path from "node:path";
 import manifest from "./release-manifest.json";
 
 export type Artifact = { file: string; bytes: number; sha256: string; builtAt: string };
@@ -55,11 +61,22 @@ export function artifactUrl(key: TargetKey): string | null {
   return base && a ? `${base}/${encodeURIComponent(a.file)}` : null;
 }
 
+/**
+ * The local build output for a target, only under `next dev` with no release
+ * host configured; null in production, in tests and when the target is not built.
+ */
+export function localArtifactPath(key: TargetKey): string | null {
+  if (process.env.NODE_ENV !== "development" || downloadBase()) return null;
+  const a = TARGETS[key].artifact;
+  return a ? path.join(process.cwd(), "dist-desktop", path.basename(a.file)) : null;
+}
+
 export type TargetStatus = { key: TargetKey; label: string; artifact: Artifact | null; available: boolean; href: string };
 
 export function targetStatus(key: TargetKey): TargetStatus {
   const t = TARGETS[key];
-  const available = artifactUrl(key) !== null;
+  const local = localArtifactPath(key);
+  const available = artifactUrl(key) !== null || (local !== null && fs.existsSync(local));
   return { key, label: t.label, artifact: t.artifact, available, href: `/download/${key}` };
 }
 

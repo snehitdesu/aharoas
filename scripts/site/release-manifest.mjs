@@ -7,7 +7,8 @@
  *
  *   node scripts/site/release-manifest.mjs [distDir]
  *
- * The files themselves are not served by the website: upload them to the
+ * The production website does not serve the files (only `next dev` streams
+ * them from dist-desktop/ for local testing): upload them to the
  * release host (GitHub Releases, a CDN, object storage) and set
  * RESTORA_DOWNLOAD_BASE_URL to the folder URL (see docs/website.md).
  */

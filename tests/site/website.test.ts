@@ -50,6 +50,28 @@ describe("downloads", () => {
     expect((await load()).downloadBase()).toBe("http://localhost:8099");
   });
 
+  it("serves local builds only under next dev with no release host", async () => {
+    vi.stubEnv("RESTORA_DOWNLOAD_BASE_URL", "");
+    for (const env of ["production", "test"]) {
+      vi.stubEnv("NODE_ENV", env);
+      vi.resetModules();
+      const r = await load();
+      for (const k of Object.keys(r.TARGETS) as (keyof typeof r.TARGETS)[]) expect(r.localArtifactPath(k), `${env} ${k}`).toBeNull();
+    }
+    vi.stubEnv("NODE_ENV", "development");
+    vi.resetModules();
+    let r = await load();
+    const win = r.TARGETS.windows.artifact;
+    if (win) expect(r.localArtifactPath("windows")).toBe(path.join(root, "dist-desktop", win.file));
+    for (const k of Object.keys(r.TARGETS) as (keyof typeof r.TARGETS)[]) {
+      if (!r.TARGETS[k].artifact) expect(r.localArtifactPath(k)).toBeNull();
+    }
+    vi.stubEnv("RESTORA_DOWNLOAD_BASE_URL", "https://downloads.example.com/v1");
+    vi.resetModules();
+    r = await load();
+    expect(r.localArtifactPath("windows")).toBeNull();
+  });
+
   it("matches the release manifest to package.json", async () => {
     const r = await load();
     const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
