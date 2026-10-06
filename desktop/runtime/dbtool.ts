@@ -4,7 +4,8 @@
  *
  *   status    → migration state + whether the restaurant is set up
  *   migrate   → verified pre-migration backup (if data exists) → forward migrations
- *   bootstrap → Phase 5A bootstrapOwner (refuses unless the DB is empty)
+ *   bootstrap → Phase 5A bootstrapOwner (refuses unless the DB is empty), then optionally
+ *               the Coders' Cafe starter menu (services/starterMenu.ts) for the new owner
  *   backup    → verified backup + rotation of automatic backups
  *   verify    → verify a backup file (integrity + manifest hash + known migrations)
  *
@@ -15,6 +16,8 @@
 import { PrismaClient } from "@prisma/client";
 import { ZodError } from "zod";
 import { bootstrapOwner, ALREADY_INITIALIZED } from "@/server/services/bootstrap";
+import { buildAccessContext } from "@/server/auth/context";
+import { importCodersCafeStarter } from "@/server/services/starterMenu";
 import { inspectMigrations, loadMigrations, MigrationRefusedError } from "./migrator";
 import { upgradeDatabase } from "./upgrade";
 import { createVerifiedBackup, rotateAutoBackups, sqliteUrl, verifyBackupFile, BACKUP_REASONS, type BackupReason, type ClientFactory } from "./backup";
@@ -64,7 +67,20 @@ async function handle(req: Request): Promise<unknown> {
       const input = req.args?.input;
       if (!input || typeof input !== "object") throw new Error("Invalid argument: input");
       const r = await bootstrapOwner(db(), input as never);
-      return { organizationId: r.organizationId, outletId: r.outletId, ownerEmail: r.ownerEmail };
+      // Optional Coders' Cafe starter, as the new owner (audited under their name). The restaurant
+      // already exists at this point: a failed import is reported, never undoes setup, and can be
+      // retried from Menu → Items (the import only runs into an empty menu).
+      let starter: { items: number; tablesCreated: string[] } | { error: string } | null = null;
+      if (req.args?.starterMenu === true) {
+        try {
+          const ctx = await buildAccessContext(db(), r.ownerId);
+          const s = await importCodersCafeStarter(ctx, { outletId: r.outletId }, db());
+          starter = { items: s.items, tablesCreated: s.tablesCreated };
+        } catch (e) {
+          starter = { error: (e as Error).message.split("\n").filter(Boolean).slice(-1)[0] ?? "import failed" };
+        }
+      }
+      return { organizationId: r.organizationId, outletId: r.outletId, ownerEmail: r.ownerEmail, starter };
     }
     case "backup": {
       const reason = str(req.args, "reason") as BackupReason;

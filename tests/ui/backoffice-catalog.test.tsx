@@ -733,7 +733,7 @@ describe("floors & tables", () => {
   it("managers set up floors and tables (outlet from the shell) and rotate QR tokens", async () => {
     state.routes = {
       "GET /api/master/tables": () => tables, "GET /api/master/floors": () => floors,
-      "POST /api/master/floors": () => ({}), "POST /api/master/tables": () => ({}), "PATCH /api/master/tables/t2": () => ({}), "POST /api/master/tables/t1/qr": () => ({}),
+      "POST /api/master/floors": () => ({}), "POST /api/master/tables": () => ({}), "PATCH /api/master/tables/t2": () => ({}), "POST /api/master/tables/t1/qr": () => ({}), "POST /api/master/tables/t1/qr/revoke": () => ({}),
     };
     renderAs(<TablesScreen />, ["outlet.manage", "master.view"]);
     const floorTable = await screen.findByRole("table", { name: "Floors" });
@@ -766,11 +766,31 @@ describe("floors & tables", () => {
 
     await userEvent.click(within(table).getByRole("button", { name: "QR for T1" }));
     const qr = await screen.findByRole("dialog", { name: "QR — table T1" });
-    expect(within(qr).getByLabelText("QR token")).toHaveTextContent("tok_1");
+    // A scannable code for the guest link; without PUBLIC_BASE_URL the screen's own (here: localhost) address is used, with a warning.
+    expect(within(qr).getByRole("img", { name: "QR code for table T1" })).toBeInTheDocument();
+    expect(within(qr).getByLabelText("Guest ordering link")).toHaveTextContent(/\/t\/tok_1$/);
+    expect(within(qr).getByRole("note")).toHaveTextContent(/phones cannot open it.*PUBLIC_BASE_URL/);
+    expect(within(qr).getByRole("button", { name: "Download QR (SVG)" })).toBeInTheDocument();
     await userEvent.click(within(qr).getByRole("button", { name: "Rotate token" }));
     await userEvent.click(within(await screen.findByRole("dialog", { name: "Rotate the QR for T1?" })).getByRole("button", { name: "Rotate" }));
     await waitFor(() => expect(posts()).toHaveLength(4));
     expect(posts()[3]).toMatchObject({ path: "/api/master/tables/t1/qr" });
+    await userEvent.click(within(await screen.findByRole("dialog", { name: "QR — table T1" })).getByRole("button", { name: "Disable QR ordering" }));
+    await userEvent.click(within(await screen.findByRole("dialog", { name: "Disable QR ordering at T1?" })).getByRole("button", { name: "Disable" }));
+    await waitFor(() => expect(posts()).toHaveLength(5));
+    expect(posts()[4]).toMatchObject({ path: "/api/master/tables/t1/qr/revoke" });
+  });
+
+  it("the QR encodes the server's public guest address when PUBLIC_BASE_URL is configured", async () => {
+    const { tableGuestLink } = await import("@/features/backoffice/tables");
+    expect(tableGuestLink({ qrToken: "tok_9", guestUrl: "https://cafe.example/t/tok_9" }, "http://localhost:3000")).toEqual({ url: "https://cafe.example/t/tok_9", publicAddress: true });
+    expect(tableGuestLink({ qrToken: "tok_9", guestUrl: null }, "http://localhost:3000")).toEqual({ url: "http://localhost:3000/t/tok_9", publicAddress: false });
+    expect(tableGuestLink({ qrToken: null, guestUrl: null }, "http://x")).toBeNull();
+    const { qrSvgPath } = await import("@/components/ui/QrCode");
+    const { create } = await import("qrcode");
+    const a = qrSvgPath("https://cafe.example/t/tok_9");
+    expect(a.size).toBe(create("https://cafe.example/t/tok_9", { errorCorrectionLevel: "M" }).modules.size + 8);
+    expect(qrSvgPath("https://cafe.example/t/other").d).not.toBe(a.d);
   });
 
   it("empty and error states", async () => {

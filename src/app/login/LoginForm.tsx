@@ -39,6 +39,18 @@ export function LoginForm({ next }: { next?: string }) {
     setError(null);
     try {
       await api("/api/auth/login", { method: "POST", body: { email, password } });
+      // The server accepted the password; make sure this browser kept the session
+      // cookie before navigating (a dropped cookie would bounce back here silently).
+      try {
+        await api("/api/auth/me");
+      } catch (err) {
+        if (err instanceof ApiError && err.kind === "unauthorized") {
+          setError("Your password was accepted, but this browser did not keep the sign-in cookie. Open RESTORA at its https:// address and allow cookies for this site.");
+          setBusy(false);
+          return;
+        }
+        throw err;
+      }
       router.replace(safeNext(next));
       router.refresh();
     } catch (err) {

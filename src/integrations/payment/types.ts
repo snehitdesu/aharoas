@@ -2,7 +2,12 @@
  * Payment provider abstraction. The domain never trusts the client's claim that
  * a payment succeeded — it asks a provider to verify server-side.
  */
-export type VerifyResult = { verified: boolean; providerRef?: string; reason?: string };
+/**
+ * `pending`: the gateway has not decided yet (checkout still open, payment
+ * authorized but not captured). The payment must stay PENDING, never FAILED:
+ * the guest may still complete it, and a late capture must find it payable.
+ */
+export type VerifyResult = { verified: boolean; providerRef?: string; reason?: string; pending?: boolean };
 
 /** A gateway webhook event, normalized. */
 export type PaymentWebhookEvent = {
@@ -42,6 +47,8 @@ export interface PaymentProvider {
   readonly mode: IntegrationMode;
   /** Create the gateway-side checkout for a server-computed amount. Optional: counter / test providers have none. */
   createCheckout?(input: CheckoutRequest): Promise<CheckoutSession>;
+  /** Public checkout data to reopen an existing gateway checkout (a refresh mid-payment). Never a secret. */
+  resumeCheckout?(input: { providerRef: string; amount: number; currency: string }): Record<string, string | number>;
   /** Ask the gateway for the current state of a payment. Optional capability. */
   getPaymentStatus?(providerRef: string): Promise<ProviderPaymentStatus>;
   /** Verify a payment server-side (e.g. call the gateway or check a signature). */

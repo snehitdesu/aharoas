@@ -6,7 +6,7 @@ import {
   createMaterial, updateMaterial, listMaterials, getMaterial,
   createVendor, updateVendor, listVendors, getVendor, linkVendorMaterial,
   createOutlet, updateOutlet, listOutlets,
-  createFloor, createTable, updateTable, setTableStatus, rotateTableQr, listTables,
+  createFloor, createTable, updateTable, setTableStatus, rotateTableQr, revokeTableQr, listTables,
 } from "@/server/services/masterData";
 import {
   getOrganization, updateOrganization, listDepartments, createDepartment, updateDepartment,
@@ -62,4 +62,5 @@ export const { GET, POST, PATCH } = createRouter([
   { method: "PATCH", path: "tables/:id", handler: ({ ctx, params, body }) => updateTable(ctx, params.id, body as never) },
   { method: "POST", path: "tables/:id/status", handler: ({ ctx, params, body }) => setTableStatus(ctx, params.id, z.object({ status: z.string() }).parse(body).status) },
   { method: "POST", path: "tables/:id/qr", handler: ({ ctx, params }) => rotateTableQr(ctx, params.id) },
+  { method: "POST", path: "tables/:id/qr/revoke", handler: ({ ctx, params }) => revokeTableQr(ctx, params.id) },
 ]);

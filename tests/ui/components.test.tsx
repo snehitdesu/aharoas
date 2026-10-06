@@ -389,6 +389,19 @@ describe("login", () => {
     expect(router.replace).toHaveBeenCalledWith("/dashboard");
   });
 
+  it("does not navigate when the browser dropped the session cookie (e.g. plain-HTTP production)", async () => {
+    const user = userEvent.setup();
+    router.replace.mockClear();
+    handler = (c) => (c.url === "/api/auth/me" ? { status: 401, error: { code: "UnauthorizedError", message: "Authentication required" } } : ok({ user: {} }));
+    render(<LoginForm />);
+    await user.type(screen.getByLabelText("Email"), "a@b.co");
+    await user.type(screen.getByLabelText("Password"), "secret");
+    await user.click(screen.getByRole("button", { name: "Sign in" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("did not keep the sign-in cookie");
+    expect(router.replace).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Sign in" })).toBeEnabled();
+  });
+
   it("keeps Sign in actionable and explains empty fields without calling the API", async () => {
     const user = userEvent.setup();
     handler = () => ok({ user: {} });

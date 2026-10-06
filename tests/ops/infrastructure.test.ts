@@ -151,12 +151,32 @@ describe("production configuration (Phase 9)", () => {
     fails({ INTEGRATION_SECRETS_KEY: "short" }, /INTEGRATION_SECRETS_KEY/);
     fails({ METRICS_TOKEN: "short" }, /METRICS_TOKEN/);
     fails({ PUBLIC_BASE_URL: "http://pos.example.com" }, /PUBLIC_BASE_URL must be an https/);
+    fails({ NEXT_PUBLIC_SITE_URL: "http://restora.example" }, /NEXT_PUBLIC_SITE_URL must be an https/);
     fails({ ALERT_WEBHOOK_URL: "not a url" }, /ALERT_WEBHOOK_URL must be a valid URL/);
     fails({ RATE_LIMIT_STORE: "redis" }, /RATE_LIMIT_STORE/);
     fails({ LOG_LEVEL: "verbose" }, /LOG_LEVEL/);
     fails({ TRUSTED_PROXY_HOPS: "0" }, /TRUSTED_PROXY_HOPS/);
     fails({ SHUTDOWN_TIMEOUT_MS: "10" }, /SHUTDOWN_TIMEOUT_MS/);
     expect(() => validateProductionEnv({ ...base, PUBLIC_BASE_URL: "https://pos.example.com", ALERT_WEBHOOK_URL: "https://hooks.example.com/x", METRICS_TOKEN: "m".repeat(32), LOG_LEVEL: "warn" })).not.toThrow();
+  });
+
+  it("Razorpay must be fully configured; test keys are flagged; the emulator override is refused", () => {
+    const rzp = { PAYMENT_PROVIDER: "razorpay", RAZORPAY_KEY_ID: "rzp_live_AbC123", RAZORPAY_KEY_SECRET: "live-secret-value", RAZORPAY_WEBHOOK_SECRET: "webhook-secret-value" };
+    expect(() => validateProductionEnv({ ...base, ...rzp })).not.toThrow();
+    fails({ ...rzp, RAZORPAY_KEY_ID: "" }, /RAZORPAY_KEY_ID must be a Razorpay key id/);
+    fails({ ...rzp, RAZORPAY_KEY_ID: "pk_live_123" }, /RAZORPAY_KEY_ID must be a Razorpay key id/);
+    fails({ ...rzp, RAZORPAY_KEY_SECRET: "" }, /RAZORPAY_KEY_SECRET is required/);
+    fails({ ...rzp, RAZORPAY_WEBHOOK_SECRET: "" }, /RAZORPAY_WEBHOOK_SECRET is required/);
+    fails({ ...rzp, RAZORPAY_API_BASE: "http://localhost:9" }, /RAZORPAY_API_BASE/);
+    let msg = "";
+    try {
+      validateProductionEnv({ ...base, ...rzp, RAZORPAY_KEY_SECRET: "", RAZORPAY_KEY_ID: "rzp_live_shown?no" });
+    } catch (e) {
+      msg = (e as Error).message;
+    }
+    expect(msg).not.toContain("shown?no");
+    expect(productionEnvWarnings({ ...base, ...rzp }).join("\n")).not.toMatch(/TEST key/);
+    expect(productionEnvWarnings({ ...base, ...rzp, RAZORPAY_KEY_ID: "rzp_test_AbC123" }).join("\n")).toMatch(/RAZORPAY_KEY_ID is a TEST key/);
   });
 
   it("names variables and reasons only — never a value — and warns about risky defaults", () => {
@@ -172,6 +192,11 @@ describe("production configuration (Phase 9)", () => {
     expect(w).toMatch(/SQLite/);
     expect(w).toMatch(/EXPORT_DIR/);
     expect(w).toMatch(/METRICS_TOKEN/);
+    // Unset public addresses: QR codes would follow the viewer, the website would advertise localhost.
+    expect(w).toMatch(/PUBLIC_BASE_URL is unset/);
+    expect(w).toMatch(/NEXT_PUBLIC_SITE_URL is unset/);
+    const set = productionEnvWarnings({ ...base, PUBLIC_BASE_URL: "https://pos.example.com", NEXT_PUBLIC_SITE_URL: "https://restora.example" }).join("\n");
+    expect(set).not.toMatch(/PUBLIC_BASE_URL is unset|NEXT_PUBLIC_SITE_URL is unset/);
     expect(productionEnvWarnings({ ...base, DATABASE_URL: "file:./x.db", AHAROS_DESKTOP: "1" })).toEqual([]);
     expect(productionEnvWarnings({ NODE_ENV: "development" })).toEqual([]);
   });

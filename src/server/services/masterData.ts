@@ -453,8 +453,35 @@ export async function rotateTableQr(ctx: AccessContext, tableId: string, db: Cli
   });
 }
 
+/**
+ * Withdraw the table's QR: its printed code stops working at once (guests see
+ * the generic "not valid" message) and the table takes no QR orders until a new
+ * code is issued. Staff ordering at the table is unaffected.
+ */
+export async function revokeTableQr(ctx: AccessContext, tableId: string, db: Client = prisma) {
+  return runInTx(db, async (tx) => {
+    const t = await loadTable(tx, ctx, tableId);
+    assertOutletManager(ctx, t.outletId);
+    const updated = await tx.restaurantTable.update({ where: { id: tableId }, data: { qrToken: null } });
+    await writeAudit(tx, ctx, { action: "UPDATE", entityType: "RestaurantTable", entityId: tableId, outletId: t.outletId, before: { qrIssued: Boolean(t.qrToken) }, after: { qrIssued: false, qrRevoked: true } });
+    return updated;
+  });
+}
+
 export async function listTables(db: PrismaClient, ctx: AccessContext, outletId: string) {
   assertOutletAccess(ctx, outletId);
   if (!can(ctx, "order.view", outletId) && !can(ctx, "reservation.manage", outletId) && !can(ctx, "outlet.manage", outletId)) throw new ForbiddenError("Missing permission to view tables");
-  return db.restaurantTable.findMany({ where: { organizationId: ctx.organizationId, outletId }, orderBy: [{ code: "asc" }], take: 500, include: { floor: { select: { name: true } } } });
+  const rows = await db.restaurantTable.findMany({ where: { organizationId: ctx.organizationId, outletId }, orderBy: [{ code: "asc" }], take: 500, include: { floor: { select: { name: true } } } });
+  const base = guestBaseUrl();
+  return rows.map((t) => ({ ...t, guestUrl: t.qrToken && base ? `${base}/t/${encodeURIComponent(t.qrToken)}` : null }));
+}
+
+/**
+ * The public address guests' phones open (PUBLIC_BASE_URL). Unset → null: the
+ * Tables screen then falls back to the address it is viewed on and warns that a
+ * desktop / localhost address is not reachable from a phone.
+ */
+export function guestBaseUrl(): string | null {
+  const v = process.env.PUBLIC_BASE_URL?.trim();
+  return v ? v.replace(/\/+$/, "") : null;
 }

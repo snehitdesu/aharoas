@@ -70,6 +70,17 @@ const SETUP_LIMITS: Record<keyof SetupInput, number> = {
  * Business rules (outlet code format, timezone, password policy, empty database)
  * are enforced again by bootstrapOwner — this only keeps junk away from it.
  */
+/**
+ * The wizard's optional "Start with the Coders' Cafe menu" choice travels next to
+ * the setup fields; split it off before the strict field check. Only a literal
+ * `true` opts in; anything else (missing, "true", 1…) means no import.
+ */
+export function splitStarterChoice(raw: unknown): { input: unknown; starterMenu: boolean } {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw) || !Object.prototype.hasOwnProperty.call(raw, "starterMenu")) return { input: raw, starterMenu: false };
+  const { starterMenu, ...input } = raw as Record<string, unknown>;
+  return { input, starterMenu: starterMenu === true };
+}
+
 export function validateSetupInput(raw: unknown): Validated<SetupInput> {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { ok: false, fieldErrors: { input: ["Expected an object"] } };
   const obj = raw as Record<string, unknown>;

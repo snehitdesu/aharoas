@@ -107,7 +107,7 @@ describe("QR table resolution and guest menu", () => {
     expect(b.modifierGroups[0].group.options.map((o) => o.name).sort()).toEqual(["Hot", "Mild"]);
     expect(m.menu.some((i) => i.id === foreignItem)).toBe(false);
     for (const field of ["posCode", "createdById", "organizationId", "outletOverrides"]) expect(b).not.toHaveProperty(field);
-    expect(m.payment).toEqual({ online: true, testMode: true });
+    expect(m.payment).toEqual({ online: true, testMode: true, mode: "MOCK" });
   });
 
   it("refuses malformed, unknown and rotated tokens, and tables of inactive outlets — with one message", async () => {

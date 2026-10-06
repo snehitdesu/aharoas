@@ -14,7 +14,7 @@ import { pathToFileURL } from "node:url";
 import { SESSION_COOKIE } from "@/constants/auth";
 import { dataPaths, ensureDirs, loadOrCreateConfig, prismaEngineFile, readSecret, saveConfig, type DataPaths, type DesktopConfig, type SecretCodec } from "./config";
 import { createLogger, type Logger } from "./log";
-import { appOrigin, childEnv, hasDebugSwitch, isAllowedRendererRequest, isAppUrl, parseReauthReply, restoreAuthorizationFrom, validatePrinterName, validateSetupInput, type ReauthOutcome, type RestoreAuthorization } from "./policy";
+import { appOrigin, childEnv, hasDebugSwitch, isAllowedRendererRequest, isAppUrl, parseReauthReply, restoreAuthorizationFrom, splitStarterChoice, validatePrinterName, validateSetupInput, type ReauthOutcome, type RestoreAuthorization } from "./policy";
 import { AharosServer, anyFreePort, DbTool, DbToolError, portFree } from "./processes";
 import { listPrinters, MockPrinterDriver, SystemPrinterDriver, testPage, type PrinterDriver } from "./hardware";
 import { sqliteUrl } from "../runtime/backup";
@@ -183,14 +183,17 @@ function runSetupWizard(tool: DbTool): Promise<void> {
     ipcMain.handle("setup:submit", async (e, raw: unknown) => {
       fromSetup(e);
       if (creating || done) return { ok: false, message: "Setup is already in progress" };
-      const v = validateSetupInput(raw);
+      const { input, starterMenu } = splitStarterChoice(raw);
+      const v = validateSetupInput(input);
       if (!v.ok) return { ok: false, message: "Please check the highlighted fields", fieldErrors: v.fieldErrors };
       creating = true;
       try {
-        const r = await tool.call<{ ownerEmail: string }>("bootstrap", { input: v.value });
+        const r = await tool.call<{ ownerEmail: string; starter: { items: number; tablesCreated: string[] } | { error: string } | null }>("bootstrap", { input: v.value, starterMenu });
         done = true;
         log.info(`First-run setup completed for ${r.ownerEmail}`);
-        return { ok: true, ownerEmail: r.ownerEmail };
+        if (r.starter && "error" in r.starter) log.warn(`Coders' Cafe menu not imported: ${r.starter.error}`);
+        else if (r.starter) log.info(`Coders' Cafe menu imported: ${r.starter.items} items, tables ${r.starter.tablesCreated.join(", ")}`);
+        return { ok: true, ownerEmail: r.ownerEmail, starterError: r.starter && "error" in r.starter ? r.starter.error : undefined };
       } catch (err) {
         const d = err instanceof DbToolError ? err.detail : { name: "Error", message: (err as Error).message };
         log.warn(`Setup rejected: ${d.name}`);

@@ -20,9 +20,16 @@ from Windows, and an Intel DMG cannot be produced on Apple Silicon). CI builds b
 `.github/workflows/ci.yml` job `desktop-macos` (arm64 + x64 runners) runs the
 desktop E2E, `desktop:verify` and the DMG build and uploads each DMG.
 
-Not yet done for macOS: **(1)** no run on real Mac hardware or a macOS CI runner
-has happened yet — treat the macOS build as unverified until the `desktop-macos`
-job (or the steps below on a Mac) passes; **(2)** no Developer ID signing or
+Not yet done for macOS: **(1)** no macOS package has been produced yet. Every
+`desktop-macos` run up to 6bca43c built the payload and passed the desktop E2E on
+both arches, then failed at "Package: RESTORA.app" with `<repo> not a file`: the
+workflow exported `CSC_LINK=""` (secret not configured) and electron-builder treats
+an empty `CSC_LINK` as a certificate path. Fixed 2026-10-06 (CSC_* are exported only
+when the secret is non-empty); the next push must show the job green and attach
+`restora-mac-arm64` / `restora-mac-x64` DMGs before macOS counts as built. Then copy
+both DMGs into `dist-desktop/`, run `node scripts/site/release-manifest.mjs`, upload
+them to the release host, and the download page lists them. Until then the site
+correctly says "Not released yet"; **(2)** no Developer ID signing or
 notarization: the app is ad-hoc signed and Gatekeeper requires right-click → Open
 on first launch. To sign and notarize: GitHub secrets `MAC_CSC_LINK` /
 `MAC_CSC_KEY_PASSWORD` (Developer ID Application certificate, .p12) and

@@ -62,6 +62,14 @@ const removed = [];
     }
   }
 })(serverDir);
+// The download route reads dist-desktop/ under `next dev` only; the tracer still copies it (every
+// built installer). next.config excludes it, but Next applies that exclude with Windows-separator
+// paths that never match there, so it is removed here on every platform (and the scan below fails
+// the build if any installer artifact remains).
+if (fs.existsSync(path.join(serverDir, "dist-desktop"))) {
+  fs.rmSync(path.join(serverDir, "dist-desktop"), { recursive: true, force: true });
+  removed.push("server/dist-desktop/ (traced build output)");
+}
 // TypeScript is traced in only because next.config is read at build time; the server never loads it.
 fs.rmSync(path.join(serverDir, "node_modules", "typescript"), { recursive: true, force: true });
 if (removed.length) step(`removed from payload: ${removed.join(", ")}`);
@@ -130,6 +138,8 @@ const thirdParty = (p) => /[\\/]node_modules[\\/](?!\.prisma[\\/])/.test(p);
     if (e.isDirectory()) scan(p);
     else {
       if (/^\.env/.test(e.name) || /\.db$/.test(e.name)) problems.push(`forbidden file ${path.relative(out, p)}`);
+      // Build output must never ride along (a traced dist-desktop/ once shipped the previous installers).
+      if (/[\\/](dist-desktop|win-unpacked)[\\/]/.test(p) || /\.(exe|dmg|blockmap)$/i.test(e.name)) problems.push(`forbidden build artifact ${path.relative(out, p)}`);
       if (!secrets.length || thirdParty(p) || fs.statSync(p).size > 20 * 1024 * 1024 || /\.(node|png|wasm|woff2?)$/.test(e.name)) continue;
       const text = fs.readFileSync(p, "latin1");
       for (const s of secrets) if (text.includes(s.v)) problems.push(`value of ${s.k} found in ${path.relative(out, p)}`);

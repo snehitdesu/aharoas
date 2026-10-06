@@ -64,17 +64,44 @@ function match(segs: string[], pattern: string[]): Record<string, string> | null
   return params;
 }
 
-/** Reject browser requests whose Origin is not this host (CSRF defence-in-depth). */
+/** Origin (scheme://host[:port]) of a configured public URL, or null when unset/invalid. */
+function configuredOrigin(v: string | undefined): string | null {
+  if (!v?.trim()) return null;
+  try {
+    return new URL(v.trim()).origin;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Reject browser requests whose Origin is not this deployment (CSRF defence-in-depth).
+ *
+ * Same-origin means the Origin's host is the Host the request was addressed to,
+ * or one of the hosts the reverse-proxy chain recorded in X-Forwarded-Host (every
+ * hop appends one, so it can be a list), or the Origin is exactly the configured
+ * public origin (PUBLIC_BASE_URL / NEXT_PUBLIC_SITE_URL) — a proxy that rewrites
+ * Host to the upstream address and sends no X-Forwarded-Host would otherwise
+ * make every sign-in a 403. A cross-site page cannot forge any of these: its
+ * browser sends the attacker's Origin, and it cannot set X-Forwarded-Host
+ * without a CORS preflight that this app never grants.
+ */
 export function assertSameOrigin(req: NextRequest) {
   const origin = req.headers.get("origin");
   if (!origin) return; // non-browser clients
-  const host = req.headers.get("x-forwarded-host") ?? req.headers.get("host");
+  let parsed: URL;
   try {
-    if (new URL(origin).host !== host) throw new ForbiddenError("Cross-origin request rejected");
-  } catch (e) {
-    if (e instanceof ForbiddenError) throw e;
+    parsed = new URL(origin);
+  } catch {
     throw new ForbiddenError("Invalid Origin header");
   }
+  const hosts = [req.headers.get("host"), ...(req.headers.get("x-forwarded-host") ?? "").split(",")]
+    .map((h) => h?.trim().toLowerCase())
+    .filter(Boolean);
+  if (hosts.includes(parsed.host.toLowerCase())) return;
+  const trusted = [configuredOrigin(process.env.PUBLIC_BASE_URL), configuredOrigin(process.env.NEXT_PUBLIC_SITE_URL)];
+  if (trusted.includes(parsed.origin)) return;
+  throw new ForbiddenError("Cross-origin request rejected");
 }
 
 /** Could some concrete path match both patterns? (Same length; each segment equal or a parameter.) */

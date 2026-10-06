@@ -119,6 +119,27 @@ const STATUS_FILTERS = [
   { value: "inactive", label: "Off menu" },
 ];
 
+/**
+ * Empty organization menu: offer the real Coders' Cafe menu (8 categories, 64
+ * items) and tables T01–T10. The server imports it only into an empty menu,
+ * additively and in one transaction (services/starterMenu.ts).
+ */
+function StarterMenuOffer({ outletId, onDone }: { outletId: string; onDone: () => void }) {
+  return (
+    <Card className="mt-4">
+      <h2 className="text-sm font-semibold text-ink-900">Start with the Coders&apos; Cafe menu</h2>
+      <p className="mt-1 text-sm text-ink-600">
+        Imports the real Coders&apos; Cafe menu (8 categories, 64 items with sizes and pizza add-ons, 5% GST) and dine-in tables T01 to T10 with new QR codes. Nothing existing is changed; you can edit or switch off any item afterwards.
+      </p>
+      <ActionButton className="mt-3" variant="primary" action={() => api("/api/menu/starter", { method: "POST", body: { outletId } })}
+        confirm={{ title: "Import the Coders' Cafe menu?", message: "64 menu items in 8 categories and tables T01 to T10 will be added to this restaurant.", confirmLabel: "Import menu" }}
+        success="Coders' Cafe menu imported" onDone={onDone}>
+        Import the Coders&apos; Cafe menu
+      </ActionButton>
+    </Card>
+  );
+}
+
 export function MenuItemsScreen() {
   const router = useRouter();
   const { outletId, outlet } = useShell();
@@ -168,6 +189,9 @@ export function MenuItemsScreen() {
           { key: "m", header: "Modifiers", numeric: true, cell: (r) => r.modifierGroups.length || "—" },
         ]} />
       <Pager {...pager} />
+      {orgManage && outletId && !search && !status && !categoryId && menu.data?.length === 0 && cats.data?.length === 0 && (
+        <StarterMenuOffer outletId={outletId} onDone={() => (menu.reload(), cats.reload())} />
+      )}
       {creating && <ItemDialog categories={cats.data ?? []} onClose={() => setCreating(false)} onDone={(r) => router.push(`/menu/items/${r.id}`)} />}
     </>
   );

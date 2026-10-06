@@ -19,7 +19,7 @@ webhook + metrics scraper. Details: `docs/production-infrastructure.md`.
    CREATE DATABASE restora OWNER restora_owner;
    ```
 2. App host: Node 20+, the release build (see §1.2), a persistent private `EXPORT_DIR`.
-3. Reverse proxy: HTTPS, HSTS, forwards `X-Forwarded-For`; health check `GET /api/health/ready`, liveness `GET /api/health/live`; on stop send SIGTERM and wait ≥ 30 s.
+3. Reverse proxy: HTTPS (sign-in refuses plain `http://` on non-loopback addresses: the session cookie is `Secure`), HSTS, forwards `X-Forwarded-For`; forward the public `Host` (or `X-Forwarded-Host`) — otherwise set `PUBLIC_BASE_URL` to the public https origin so browser requests from it pass the same-origin check; health check `GET /api/health/ready`, liveness `GET /api/health/live`; on stop send SIGTERM and wait ≥ 30 s.
 4. Secrets (secrets manager): `AUTH_SECRET`, `INTEGRATION_SECRETS_KEY`, webhook secrets, provider keys, `METRICS_TOKEN`, `BACKUP_ENCRYPTION_KEY` (stored apart from backups), database passwords for `restora_owner`, `restora_app`, `restora_backup`.
 
 ### 1.2 Build the release
@@ -53,12 +53,24 @@ NODE_ENV=production
 DATABASE_URL=postgresql://restora_app:…@db:5432/restora?sslmode=require&connection_limit=10&pool_timeout=10
 AUTH_SECRET=…  INTEGRATION_SECRETS_KEY=…  METRICS_TOKEN=…  ALERT_WEBHOOK_URL=https://…
 TRUSTED_PROXY_HOPS=1  PUBLIC_BASE_URL=https://pos.example.com  EXPORT_DIR=/var/lib/restora/exports
-PAYMENT_PROVIDER=razorpay (or unset for counter payments only)  … provider keys / webhook secrets …
+PAYMENT_PROVIDER=razorpay (or unset for counter payments only)
+RAZORPAY_KEY_ID=rzp_live_…  RAZORPAY_KEY_SECRET=…  RAZORPAY_WEBHOOK_SECRET=…   # docs/payments-razorpay.md
 BACKUP_STATUS_FILE=/var/backups/restora/last-backup.json
 npx next start -p 3000
 ```
 Check: the boot log has `server started` and only the `config_warning`s you expect;
 `curl https://pos.example.com/api/health/ready` → `{"status":"ready"}`.
+
+### 1.4a Online payments and table QR codes (if guests pay online)
+1. Razorpay dashboard: webhook `https://pos.example.com/api/webhooks/payment/razorpay`, secret =
+   `RAZORPAY_WEBHOOK_SECRET`, events payment.captured / payment.failed / refund.processed;
+   automatic capture on.
+2. RESTORA → Settings → Integrations → Payment · razorpay → Razorpay account id (`acc_…`).
+   Webhooks of an unbound account are refused (503) and nothing changes.
+3. Tables → QR per table → **Download QR (SVG)** and print. The code points at
+   `PUBLIC_BASE_URL`; check one with a phone on mobile data (not the restaurant Wi-Fi).
+4. Test once with test keys first (`scripts/razorpay/sandbox-check.ts`, then a phone
+   payment), then switch to live keys and restart.
 
 ### 1.5 Backups (before the first customer)
 Backup host cron (daily, quiet hour) as `restora_backup`:

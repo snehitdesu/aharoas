@@ -82,6 +82,8 @@ form.addEventListener("submit", async (e) => {
     return;
   }
   delete data.confirmPassword;
+  // A checkbox, not a text field: sent as a boolean the main process checks separately.
+  data.starterMenu = data.starterMenu === "1";
   const button = $("create");
   button.disabled = true;
   button.setAttribute("aria-busy", "true");
@@ -92,6 +94,7 @@ form.addEventListener("submit", async (e) => {
       form.reset();
       $("owner-email").textContent = res.ownerEmail;
       showStep(3);
+      if (res.starterError) setError(`The restaurant is ready, but the Coders' Cafe menu was not imported (${res.starterError}). You can import it later from Menu, Items.`);
       return;
     }
     clearFieldErrors();

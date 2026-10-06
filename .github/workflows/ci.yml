@@ -34,6 +34,9 @@ jobs:
       # Relative to prisma/schema.prisma; fresh files inside this runner's checkout.
       CI_SQLITE_DEPLOY_URL: file:./ci-deploy.db
       CI_SQLITE_SHADOW_URL: file:./ci-shadow.db
+      # The schema's datasource reads env("DATABASE_URL"): `prisma validate`/`generate`
+      # and `next build` fail without it (there is no .env in CI). Never a real database.
+      DATABASE_URL: file:./ci-build.db
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -140,14 +143,25 @@ jobs:
     timeout-minutes: 60
     env:
       NEXT_TELEMETRY_DISABLED: "1"
-      # Unsigned unless signing secrets are configured (docs/desktop-release.md).
-      # electron-builder reads these; they are never committed.
-      CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
-      CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: npm }
+      # Unsigned unless signing secrets are configured (docs/desktop-release.md); never committed.
+      # CSC_* are exported ONLY when the secret is non-empty: electron-builder treats an empty
+      # CSC_LINK as a certificate path (the checkout directory) and aborts with "not a file".
+      - name: "Signing: export code-signing certificate if configured"
+        shell: bash
+        env:
+          LINK: ${{ secrets.WIN_CSC_LINK }}
+          PASS: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+        run: |
+          if [ -n "$LINK" ]; then
+            { echo "CSC_LINK<<__CSC__"; echo "$LINK"; echo "__CSC__"; echo "CSC_KEY_PASSWORD<<__CSC__"; echo "$PASS"; echo "__CSC__"; } >> "$GITHUB_ENV"
+            echo "signing certificate configured"
+          else
+            echo "no signing certificate: the package is unsigned"
+          fi
       - name: Install dependencies
         run: npm ci
       - name: "Build: desktop payload (next standalone + secret scan)"
@@ -173,15 +187,25 @@ jobs:
     timeout-minutes: 60
     env:
       NEXT_TELEMETRY_DISABLED: "1"
-      # Unsigned (ad-hoc) unless a Developer ID certificate is configured
-      # (docs/desktop-release.md). Never committed.
-      CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
-      CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: npm }
+      # Unsigned (ad-hoc) unless a Developer ID certificate is configured (docs/desktop-release.md);
+      # never committed. CSC_* are exported ONLY when the secret is non-empty: an empty CSC_LINK
+      # made electron-builder import the checkout directory as a keychain ("<repo> not a file").
+      - name: "Signing: export Developer ID certificate if configured"
+        env:
+          LINK: ${{ secrets.MAC_CSC_LINK }}
+          PASS: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+        run: |
+          if [ -n "$LINK" ]; then
+            { echo "CSC_LINK<<__CSC__"; echo "$LINK"; echo "__CSC__"; echo "CSC_KEY_PASSWORD<<__CSC__"; echo "$PASS"; echo "__CSC__"; } >> "$GITHUB_ENV"
+            echo "Developer ID certificate configured"
+          else
+            echo "no Developer ID certificate: the app is ad-hoc signed (Gatekeeper asks on first launch)"
+          fi
       - name: Install dependencies
         run: npm ci
       - name: "Runner arch matches the package arch"

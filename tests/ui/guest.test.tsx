@@ -150,6 +150,72 @@ describe("guest order page", () => {
     expect(starts[0].headers["Idempotency-Key"]).not.toBe(starts[1].headers["Idempotency-Key"]); // a new attempt after a decline
   });
 
+  describe("Razorpay Checkout", () => {
+    type Opts = { key: string; order_id: string; amount: number; currency: string; handler: (r: Record<string, string>) => void; modal: { ondismiss: () => void } };
+    let opened: Opts[] = [];
+    let behaviour: (o: Opts, failed: (r: unknown) => void) => void;
+    beforeEach(() => {
+      opened = [];
+      window.Razorpay = class {
+        private failed: (r: unknown) => void = () => undefined;
+        constructor(private o: Opts) { opened.push(o); }
+        on(_e: string, cb: (r: unknown) => void) { this.failed = cb; }
+        open() { setTimeout(() => behaviour(this.o, this.failed), 0); }
+      } as never;
+    });
+    afterEach(() => { delete window.Razorpay; });
+
+    const rzpView = (over: object = {}) => ({ orderId: "cmord9", ref: "ORD009", status: "OPEN", fulfilment: "AWAITING_ACCEPTANCE", fulfilmentLabel: "Waiting", bill: bill({ total: "462.00", balanceDue: "462.00" }), canPay: true, payment: { online: true, testMode: false, mode: "SANDBOX" }, pendingPaymentId: null, ...over });
+    const started = { paymentId: "payR", amount: "462.00", provider: "razorpay", mode: "SANDBOX", testMode: false, checkout: { provider: "razorpay", mode: "SANDBOX", keyId: "rzp_test_PUBLIC", orderId: "order_R1", amount: 46200, currency: "INR" } };
+
+    it("opens Checkout with the server's key, gateway order and amount; the signed response is verified by the server", async () => {
+      const user = userEvent.setup();
+      window.history.replaceState(null, "", "/o/cmord9#k=key-9");
+      const success = { razorpay_payment_id: "pay_1", razorpay_order_id: "order_R1", razorpay_signature: "sig" };
+      behaviour = (o) => o.handler(success);
+      handler = (c) => {
+        if (c.url.endsWith("/payments/confirm")) return { data: { ...rzpView({ status: "PAID", canPay: false, bill: bill({ kind: "RECEIPT", paymentStatus: "PAID", paid: "462.00", balanceDue: "0.00", total: "462.00" }) }), paymentStatus: "SUCCESS", pending: false } };
+        if (c.url.endsWith("/payments")) return { data: started };
+        return { data: rzpView() };
+      };
+      render(<GuestOrderScreen orderId="cmord9" />);
+      expect(await screen.findByTestId("gateway-mode")).toHaveTextContent("Razorpay test mode");
+      expect(screen.getByTestId("pay-at-counter")).toHaveTextContent("Pay at the counter");
+      await user.click(screen.getByRole("button", { name: /Pay online .*462\.00/ }));
+      expect(await screen.findByText("Payment successful. Thank you!")).toBeInTheDocument();
+      expect(opened).toEqual([expect.objectContaining({ key: "rzp_test_PUBLIC", order_id: "order_R1", amount: 46200, currency: "INR" })]);
+      const confirms = calls.filter((c) => c.url.endsWith("/payments/confirm")).map((c) => c.body);
+      expect(confirms).toEqual([{ paymentId: "payR", gateway: success }]);
+    });
+
+    it("a closed window is a status check, not a failure; a declined attempt is reported while the window stays open", async () => {
+      const user = userEvent.setup();
+      window.history.replaceState(null, "", "/o/cmord9#k=key-9");
+      behaviour = (o, failed) => {
+        failed({ error: { description: "Card declined by the bank." } });
+        o.modal.ondismiss();
+      };
+      handler = (c) => {
+        if (c.url.endsWith("/payments/confirm")) return { data: { ...rzpView({ pendingPaymentId: "payR" }), paymentStatus: "PENDING", pending: true } };
+        if (c.url.endsWith("/payments")) return { data: started };
+        return { data: rzpView() };
+      };
+      render(<GuestOrderScreen orderId="cmord9" />);
+      await user.click(await screen.findByRole("button", { name: /Pay online/ }));
+      // The bank's reason stays on screen after the window closes (the server still decides the state).
+      expect(await screen.findByText("Card declined by the bank. You can try again.")).toHaveAttribute("role", "alert");
+      expect(calls.filter((c) => c.url.endsWith("/payments/confirm")).map((c) => c.body)).toEqual([{ paymentId: "payR" }]);
+      // Resuming asks the server first (the UPI app may have completed it), then reopens the SAME checkout.
+      behaviour = (o) => o.modal.ondismiss();
+      await user.click(await screen.findByRole("button", { name: /Resume payment/ }));
+      await waitFor(() => expect(opened).toHaveLength(2));
+      // Closed again without a decline: "not completed", not "declined".
+      expect(await screen.findByText(/^Payment not completed\. If money left your account/)).toHaveAttribute("role", "status");
+      const after = calls.filter((c) => c.method === "POST").map((c) => c.url.replace("/api/qr/orders/cmord9", ""));
+      expect(after).toEqual(["/payments", "/payments/confirm", "/payments/confirm", "/payments", "/payments/confirm"]);
+    });
+  });
+
   it("without a key it explains instead of calling the API", async () => {
     window.history.replaceState(null, "", "/o/other");
     handler = () => ({ data: null });

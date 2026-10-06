@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server";
 import { prisma } from "@/server/db/client";
 import { loginWithPassword } from "@/server/auth/login";
-import { setSessionCookie } from "@/server/auth/cookies";
+import { insecureOriginProblem, setSessionCookie } from "@/server/auth/cookies";
 import { ok, fail } from "@/server/api/respond";
 import { assertSameOrigin } from "@/server/api/router";
 import { clientIp, enforceRateLimit, RATE_POLICIES } from "@/server/api/rateLimit";
@@ -21,6 +21,8 @@ async function login(req: NextRequest, requestId: string) {
   const started = performance.now();
   try {
     assertSameOrigin(req);
+    const insecure = insecureOriginProblem(req.headers.get("origin"));
+    if (insecure) throw new ValidationError(insecure);
     const text = await req.text();
     if (text.length > 10_000) throw new ValidationError("Payload too large");
     let body: unknown = {};

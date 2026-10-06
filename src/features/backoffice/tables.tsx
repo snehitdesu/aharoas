@@ -27,9 +27,10 @@ import { DataTable } from "@/components/ui/Table";
 import { PageHeader, Stat, StatusBadge } from "@/components/ui/Page";
 import { FilterBar, SelectFilter, rangeToQuery } from "@/components/ui/Filters";
 import { ActionButton } from "@/components/ui/Confirm";
+import { QrCode, qrSvgDocument } from "@/components/ui/QrCode";
 
 export type FloorRow = { id: string; outletId: string; name: string; sortOrder: number; tableCount: number };
-export type TableRow = { id: string; outletId: string; floorId: string | null; code: string; capacity: number; status: string; qrToken: string | null; floor: { name: string } | null };
+export type TableRow = { id: string; outletId: string; floorId: string | null; code: string; capacity: number; status: string; qrToken: string | null; floor: { name: string } | null; guestUrl?: string | null };
 type RunningOrder = { id: string; tableId: string | null; status: string; total: string | number; invoiceNo: string | null; createdAt: string };
 type Booking = { id: string; tableId: string | null; partySize: number; reservedAt: string; status: string; customer?: { name: string } | null };
 
@@ -41,8 +42,8 @@ const FLOOR_TILE: Record<string, string> = {
   ORDERING: "border-brand-200 bg-brand-50 text-brand-800",
   PREPARING: "border-brand-200 bg-brand-50 text-brand-800",
   READY: "border-ok-200 bg-ok-50 text-ok-800",
-  BILL_REQUESTED: "border-warn-200 bg-warn-50 text-warn-800",
-  BILLED: "border-warn-200 bg-warn-50 text-warn-800",
+  BILL_REQUESTED: "border-warn-100 bg-warn-50 text-warn-700",
+  BILLED: "border-warn-100 bg-warn-50 text-warn-700",
   RESERVED: "border-vanilla-300 bg-vanilla-100 text-ink-800",
   CLEANING: "border-ink-200 bg-ink-100 text-ink-500",
 };
@@ -96,24 +97,57 @@ function StatusDialog({ table, onClose, onDone }: { table: TableRow; onClose: ()
   );
 }
 
+/** Where the printed QR sends guests: the server's public address when configured, else this screen's own address. */
+export function tableGuestLink(table: Pick<TableRow, "qrToken" | "guestUrl">, origin: string): { url: string; publicAddress: boolean } | null {
+  if (!table.qrToken) return null;
+  if (table.guestUrl) return { url: table.guestUrl, publicAddress: true };
+  return { url: `${origin}/t/${encodeURIComponent(table.qrToken)}`, publicAddress: false };
+}
+
+function downloadQr(svg: string, filename: string) {
+  const url = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 function QrDialog({ table, onClose, onDone }: { table: TableRow; onClose: () => void; onDone: () => void }) {
+  const { outlet } = useShell();
+  const link = tableGuestLink(table, typeof window === "undefined" ? "" : window.location.origin);
+  const local = link && !link.publicAddress && /\/\/(localhost|127\.0\.0\.1|\[::1\])[:/]/.test(link.url);
   return (
     <Dialog open onClose={onClose} title={`QR — table ${table.code}`} footer={<Button onClick={onClose}>Close</Button>}>
-      {table.qrToken ? (
+      {link ? (
         <>
-          <p className="text-sm text-ink-700">Current QR token (encode it in the printed table QR):</p>
-          <code className="mt-2 block break-all rounded-md border border-ink-300 bg-ink-100/60 p-2 text-sm" aria-label="QR token">{table.qrToken}</code>
-          <p className="mt-3 text-sm text-ink-700">Guest ordering link (the address the printed QR should open):</p>
-          <a href={`/t/${encodeURIComponent(table.qrToken)}`} target="_blank" rel="noopener" className="mt-1 block break-all text-sm font-medium text-brand-700 hover:underline" aria-label="Guest ordering link">
-            {`${typeof window === "undefined" ? "" : window.location.origin}/t/${encodeURIComponent(table.qrToken)}`}
-          </a>
+          <div className="flex flex-col items-center gap-2">
+            <QrCode value={link.url} label={`QR code for table ${table.code}`} className="h-56 w-56 rounded-md border border-ink-200 bg-white p-1" />
+            <p className="text-sm font-medium">Table {table.code} · scan to order</p>
+          </div>
+          <p className="mt-3 text-sm text-ink-700">Guest ordering link (what the QR opens):</p>
+          <a href={link.url} target="_blank" rel="noopener" className="mt-1 block break-all text-sm font-medium text-brand-700 hover:underline" aria-label="Guest ordering link">{link.url}</a>
+          {!link.publicAddress && (
+            <p role="note" className={`mt-2 rounded-md border px-3 py-2 text-xs ${local ? "border-warn-100 bg-warn-50 text-warn-700" : "border-ink-200 bg-ink-50 text-ink-700"}`}>
+              {local ? "This is this computer's local address: guests' phones cannot open it. " : ""}Set PUBLIC_BASE_URL on the server to the restaurant&apos;s public web address so printed codes point there.
+            </p>
+          )}
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Button onClick={() => downloadQr(qrSvgDocument(link.url, `${outlet?.name ?? ""} · Table ${table.code}`.replace(/^ · /, "")), `table-${table.code}-qr.svg`)}>Download QR (SVG)</Button>
+          </div>
         </>
-      ) : <p className="text-sm text-ink-700">No QR token has been issued for this table.</p>}
-      <div className="mt-4">
+      ) : <p className="text-sm text-ink-700">No QR code is issued for this table: guests cannot order from it by QR.</p>}
+      <div className="mt-4 flex flex-wrap gap-2">
         <ActionButton variant={table.qrToken ? "danger" : "primary"} action={() => api(`/api/master/tables/${table.id}/qr`, { method: "POST" })} success={table.qrToken ? "QR token rotated" : "QR token issued"} onDone={onDone}
           confirm={table.qrToken ? { title: `Rotate the QR for ${table.code}?`, message: "The printed QR stops working immediately; reprint it with the new token.", danger: true, confirmLabel: "Rotate" } : undefined}>
           {table.qrToken ? "Rotate token" : "Issue token"}
         </ActionButton>
+        {table.qrToken && (
+          <ActionButton variant="secondary" action={() => api(`/api/master/tables/${table.id}/qr/revoke`, { method: "POST" })} success="QR ordering disabled for this table" onDone={onDone}
+            confirm={{ title: `Disable QR ordering at ${table.code}?`, message: "The printed QR stops working immediately. Issue a new token to enable it again.", danger: true, confirmLabel: "Disable" }}>
+            Disable QR ordering
+          </ActionButton>
+        )}
       </div>
     </Dialog>
   );

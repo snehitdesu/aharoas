@@ -6,6 +6,7 @@ import {
   addVariant, updateVariant, createModifierGroup, updateModifierGroup, addModifierOption, updateModifierOption, attachModifierGroup, detachModifierGroup, setOutletMenuItem,
 } from "@/server/services/menu";
 import { listModifierGroups } from "@/server/services/adminQueries";
+import { importCodersCafeStarter } from "@/server/services/starterMenu";
 
 export const runtime = "nodejs";
 
@@ -28,6 +29,8 @@ export const { GET, POST, PATCH, DELETE } = createRouter([
   { method: "PATCH", path: "modifier-options/:id", handler: ({ ctx, params, body }) => updateModifierOption(ctx, params.id, body as never) },
   { method: "POST", path: "items/:id/modifier-groups/:groupId", handler: ({ ctx, params }) => attachModifierGroup(ctx, params.id, params.groupId) },
   { method: "DELETE", path: "items/:id/modifier-groups/:groupId", handler: ({ ctx, params }) => detachModifierGroup(ctx, params.id, params.groupId) },
+  // The real Coders' Cafe menu + tables T01–T10, into an EMPTY menu only (services/starterMenu.ts).
+  { method: "POST", path: "starter", handler: ({ ctx, body }) => importCodersCafeStarter(ctx, { outletId: z.object({ outletId: z.string().min(1).max(64) }).parse(body).outletId }, prisma) },
   // Per-outlet overrides (menu.manage at that outlet)
   { method: "POST", path: "outlets/:outletId/items/:id", handler: ({ ctx, params, body }) => setOutletMenuItem(ctx, { ...(body as object), outletId: params.outletId, menuItemId: params.id } as never) },
 ]);

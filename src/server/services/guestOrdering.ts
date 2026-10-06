@@ -34,7 +34,7 @@ import { placeOrder } from "@/server/services/orders";
 import { createPayment, verifyPayment } from "@/server/services/payment";
 import { buildBill, billOrderInclude, loadBillVenue, orderRef, type Bill } from "@/server/services/bill";
 import { getOrderInvoices } from "@/server/services/invoicing";
-import { getPaymentProvider } from "@/integrations/payment";
+import { getPaymentProvider, type IntegrationMode } from "@/integrations/payment";
 import { D, money, num } from "@/domain/money";
 import { FULFILMENT_LABEL } from "@/domain/orderProgress";
 
@@ -90,16 +90,38 @@ export async function resolveTable(token: string, db: PrismaClient = prisma): Pr
 
 // ---------------- payment availability ----------------
 
-export type GuestPaymentOptions = { online: boolean; testMode: boolean };
+/**
+ * online: a gateway is configured and reachable. testMode: the in-process
+ * development gateway (MOCK — no gateway at all). mode: what the gateway is —
+ * SANDBOX = Razorpay test mode (no real money), LIVE = real money.
+ */
+export type GuestPaymentOptions = { online: boolean; testMode: boolean; mode: IntegrationMode | null };
 
-/** Online payment is offered only when a gateway is configured and usable. */
-export async function guestPaymentOptions(): Promise<GuestPaymentOptions> {
+const OFFLINE: GuestPaymentOptions = { online: false, testMode: false, mode: null };
+/** A real gateway's health check is a network call: every menu load and order poll would otherwise make one. */
+const HEALTH_TTL_MS = 30_000;
+let health: { key: string; at: number; ok: boolean } | null = null;
+
+/**
+ * Online payment is offered only when a gateway is configured and usable.
+ * Menu loads and order polls use a recent health result; starting a payment
+ * (`fresh`) always asks the gateway, so a payment is never begun while it is down.
+ */
+export async function guestPaymentOptions(opts: { fresh?: boolean } = {}): Promise<GuestPaymentOptions> {
+  let gw: ReturnType<typeof getPaymentProvider>;
   try {
-    const gw = getPaymentProvider();
-    return (await gw.healthCheck()) ? { online: true, testMode: gw.name === "mock" } : { online: false, testMode: false };
+    gw = getPaymentProvider();
   } catch {
-    return { online: false, testMode: false };
+    return OFFLINE;
   }
+  const key = `${gw.name}:${gw.mode}`;
+  let ok: boolean;
+  if (!opts.fresh && gw.name !== "mock" && health?.key === key && Date.now() - health.at < HEALTH_TTL_MS) ok = health.ok;
+  else {
+    ok = await gw.healthCheck().catch(() => false);
+    if (gw.name !== "mock") health = { key, at: Date.now(), ok };
+  }
+  return ok ? { online: true, testMode: gw.name === "mock", mode: gw.mode } : OFFLINE;
 }
 
 // ---------------- menu ----------------
@@ -244,7 +266,7 @@ export async function startGuestPayment(orderId: string, key: string | null | un
   const idem = idemKey.parse(idempotencyKey);
   const order = await loadGuestOrder(orderId, key, db);
   if (["PAID", "CANCELLED", "REFUNDED"].includes(order.status)) throw new ValidationError(`This order is already ${order.status.toLowerCase()}`);
-  const options = await guestPaymentOptions();
+  const options = await guestPaymentOptions({ fresh: true });
   if (!options.online) throw new ValidationError("Online payment is not available here. Please pay at the counter.");
   const gateway = getPaymentProvider();
   const collected = order.payments.filter((p) => p.status === "SUCCESS" || p.status === "PARTIAL").reduce((a, p) => a.plus(D(p.amount)), D(0));
@@ -266,6 +288,8 @@ export async function startGuestPayment(orderId: string, key: string | null | un
       providerRef = claimed.count === 1 ? session.providerRef : (await db.payment.findUniqueOrThrow({ where: { id: payment.id } })).providerRef;
       checkout = providerRef === session.providerRef ? session.checkout : undefined;
     }
+    // Resuming (refresh mid-payment): reopen the same gateway checkout, never a second gateway order.
+    if (!checkout && providerRef) checkout = gateway.resumeCheckout?.({ providerRef, amount: num(payment.amount), currency: "INR" });
     checkout ??= { provider: gateway.name, mode: gateway.mode, orderId: providerRef ?? "", amount: Math.round(num(payment.amount) * 100), currency: "INR" };
   }
   return { paymentId: payment.id, amount: money(payment.amount).toFixed(2), provider: gateway.name, mode: gateway.mode, testMode: options.testMode, checkout };
@@ -281,13 +305,18 @@ const confirmSchema = z
   })
   .strict();
 
-/** Confirm a payment with the gateway. Outcome is decided by the provider + payment service, never by this request. */
-export async function confirmGuestPayment(orderId: string, key: string | null | undefined, input: unknown, db: PrismaClient = prisma): Promise<GuestOrderView & { paymentStatus: string }> {
+/**
+ * Confirm a payment with the gateway. Outcome is decided by the provider +
+ * payment service, never by this request. Without a checkout response this is
+ * a status check ("I closed the window — did it go through?"): an undecided
+ * payment stays PENDING (`pending`), it is not failed.
+ */
+export async function confirmGuestPayment(orderId: string, key: string | null | undefined, input: unknown, db: PrismaClient = prisma): Promise<GuestOrderView & { paymentStatus: string; pending: boolean }> {
   const data = confirmSchema.parse(input);
   const order = await loadGuestOrder(orderId, key, db);
   const payment = order.payments.find((p) => p.id === data.paymentId);
   if (!payment || payment.method !== "ONLINE" || payment.actorId) throw new NotFoundError("Payment not found");
   const ctx = systemContext(order.organizationId, [order.outletId]);
   const res = await verifyPayment(ctx, payment.id, { providerRef: data.providerRef, payload: data.gateway }, db);
-  return { ...(await getGuestOrder(orderId, key, db)), paymentStatus: res.payment.status };
+  return { ...(await getGuestOrder(orderId, key, db)), paymentStatus: res.payment.status, pending: Boolean(res.pending) };
 }

@@ -21,6 +21,13 @@ databases (one intermittent SQLite failure in a first run, see the Phase 14 repo
 desktop E2E 7/7, packaged-desktop security 23/23, no migration drift; DR drill 11/11,
 PITR 7/7, staging deployment rehearsal smoke 18/18.
 
+## 2026-10-06 — production completion pass (real menu, Razorpay, QR)
+Report: `docs/production-completion-report.md`.
+- **Real menu**: Coders' Cafe, 64 items / 8 categories transcribed from the owner's board photos, 10 unreadable entries listed and not imported (`docs/coders-cafe-menu.md`, `npm run db:seed:cafe [-- --reset]`, org-scoped reset).
+- **Razorpay**: Checkout on the guest order page (CSP opened for Razorpay on `/o/*` only); undecided = PENDING (never failed); FAILED → SUCCESS recovery when Razorpay confirms a capture (retry in the same window, late capture); a capture for an order already paid another way → HIGH reconciliation anomaly, never applied twice; stored gateway reference is authoritative; production refuses an incomplete Razorpay config (`docs/payments-razorpay.md`). **Not yet run against Razorpay's real test mode: needs `rzp_test_` keys** (`scripts/razorpay/sandbox-check.ts`).
+- **Table QR**: scannable QR (SVG, download) on the Tables screen, encoding `PUBLIC_BASE_URL`; QR ordering can be disabled per table (revoke).
+- **Tests**: Razorpay emulator (`tests/support/razorpayEmulator.ts`); `tests/domain/coders-cafe-*.test.ts`; investor browser E2E `npm run e2e:investor` (owner / manager / chef / customer; Razorpay success, cash, decline + retry).
+
 ## Stack
 Next.js 15.5.27 (App Router) · React 19.0.8 · TypeScript (strict) · Prisma 6 · SQLite (dev/test) / PostgreSQL 16 (target, **executed**) ·
 Zod · bcryptjs · Vitest.

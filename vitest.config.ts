@@ -21,6 +21,9 @@ export default defineConfig({
     setupFiles: ["./tests/setup-after-commit.ts"],
     env: {
       DATABASE_URL: testDbUrl,
+      // Integration-secret encryption and sessions need a key; a fresh checkout / CI has no .env.
+      // Test-only value, never used outside the vitest processes.
+      AUTH_SECRET: process.env.AUTH_SECRET || "vitest-only-auth-secret-never-used-in-production-0000",
     },
     // Backend suites run in node; UI suites opt into jsdom per file (// @vitest-environment jsdom).
     include: ["tests/**/*.test.ts", "tests/**/*.test.tsx", "src/**/*.test.ts"],

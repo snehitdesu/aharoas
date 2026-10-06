@@ -163,17 +163,24 @@ describe("payment balance invariant", () => {
     expect(await successfulTotal(o.id)).toBe(100);
   });
 
-  it("a gateway capture beyond the balance is refused (payment stays PENDING for reconciliation)", async () => {
+  it("a gateway capture beyond the balance is never applied: it is surfaced for a refund and acknowledged", async () => {
     const o = await order();
     const cash = await createPayment(ctx, o.id, { method: "CASH", amount: 100 });
     const online = await createPayment(ctx, o.id, { method: "ONLINE", amount: 100, provider: "mock", providerRef: `over-${RUN}` });
     await verifyPayment(ctx, cash.id);
     const raw = JSON.stringify({ accountId: `acct-${orgId}`, eventId: `over-ev-${RUN}`, event: "payment.captured", providerRef: `over-${RUN}`, amount: 100 });
     const res = await receiveWebhook({ kind: "PAYMENT", provider: "mock", rawBody: raw, signature: signPaymentPayload(raw) });
-    expect(res).toMatchObject({ status: "FAILED" });
-    expect(res.reason).toMatch(/Cannot take payment for a PAID order/);
-    expect(await statusOf(online.id)).toBe("PENDING");
-    expect(await successfulTotal(o.id)).toBe(100);
+    // The gateway really holds the guest's money: acknowledged (no endless redelivery),
+    // the payment is closed, and a HIGH reconciliation anomaly asks for the refund.
+    expect(res).toMatchObject({ ok: true, status: "PROCESSED" });
+    expect(await statusOf(online.id)).toBe("FAILED");
+    expect(await successfulTotal(o.id)).toBe(100); // the invariant: never more than the balance is collected
+    const anomaly = await prisma.anomaly.findFirstOrThrow({ where: { entityType: "Payment", entityId: online.id } });
+    expect(anomaly).toMatchObject({ type: "RECONCILIATION_MISMATCH", severity: "HIGH", status: "OPEN" });
+    expect(anomaly.message).toMatch(/Cannot take payment for a PAID order.*Refund the guest/);
+    // A redelivery is a duplicate; no second anomaly.
+    expect(await receiveWebhook({ kind: "PAYMENT", provider: "mock", rawBody: raw, signature: signPaymentPayload(raw) })).toMatchObject({ status: "DUPLICATE" });
+    expect(await prisma.anomaly.count({ where: { entityType: "Payment", entityId: online.id } })).toBe(1);
   });
 
   it("a pending payment cannot be verified once the order is cancelled", async () => {

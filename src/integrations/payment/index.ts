@@ -1,6 +1,6 @@
 import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { hmacMatches, stringAt } from "@/integrations/hmac";
-import { assertMockAllowed, ProviderUnavailableError, unknownProvider } from "@/integrations/policy";
+import { assertMockAllowed, mockProvidersAllowed, ProviderUnavailableError, unknownProvider } from "@/integrations/policy";
 import { basicAuth, IntegrationError, requestJson, type FetchLike } from "@/integrations/http";
 import { z } from "zod";
 import type { CheckoutRequest, CheckoutSession, IntegrationMode, PaymentProvider, PaymentSettlementRow, PaymentWebhookEvent, ProviderPaymentStatus, RefundRequest, VerifyResult } from "./types";
@@ -38,6 +38,9 @@ export class MockPaymentProvider implements PaymentProvider {
   }
   async createCheckout(input: CheckoutRequest): Promise<CheckoutSession> {
     return { providerRef: `mockorder_${input.paymentId}`, checkout: { provider: "mock", mode: "MOCK", amount: input.amount, currency: input.currency } };
+  }
+  resumeCheckout(input: { providerRef: string; amount: number; currency: string }): Record<string, string | number> {
+    return { provider: "mock", mode: "MOCK", orderId: input.providerRef, amount: paise(input.amount), currency: input.currency };
   }
   async getPaymentStatus(providerRef: string): Promise<ProviderPaymentStatus> {
     return { status: "UNKNOWN", amount: 0, providerRef };
@@ -79,7 +82,19 @@ const RAZORPAY_API = "https://api.razorpay.com/v1";
 const paise = (rupees: number) => Math.round(rupees * 100);
 const rupees = (p: number) => Math.round(p) / 100;
 
-export type RazorpayConfig = { keyId?: string; keySecret?: string; webhookSecret?: string; fetch?: FetchLike; timeoutMs?: number; backoffMs?: number };
+export type RazorpayConfig = { keyId?: string; keySecret?: string; webhookSecret?: string; fetch?: FetchLike; timeoutMs?: number; backoffMs?: number; apiBase?: string };
+
+/**
+ * RAZORPAY_API_BASE points the adapter at a Razorpay-compatible emulator for
+ * automated end-to-end tests. Honoured ONLY where mock providers are allowed
+ * (never on a production deployment without ALLOW_MOCK_PROVIDERS=true, which
+ * startup validation refuses together with this variable), and the adapter then
+ * reports mode MOCK: it is not talking to Razorpay.
+ */
+function configuredApiBase(): string | undefined {
+  const v = process.env.RAZORPAY_API_BASE?.trim();
+  return v && mockProvidersAllowed() ? v.replace(/\/+$/, "") : undefined;
+}
 
 const rzpPayment = z.object({ id: z.string(), amount: z.number(), status: z.string(), order_id: z.string().nullish(), notes: z.union([z.record(z.unknown()), z.array(z.unknown())]).nullish(), created_at: z.number().optional() });
 const rzpOrder = z.object({ id: z.string(), amount: z.number(), amount_paid: z.number().default(0), status: z.string() });
@@ -116,8 +131,13 @@ export class RazorpayPaymentProvider implements PaymentProvider {
   private readonly fetchImpl: FetchLike;
   private readonly timeoutMs: number;
   private readonly backoffMs: number;
+  private readonly api: string;
+  private readonly emulated: boolean;
 
   constructor(cfg: RazorpayConfig = {}) {
+    const base = cfg.apiBase ?? configuredApiBase();
+    this.api = base ?? RAZORPAY_API;
+    this.emulated = Boolean(base) && base !== RAZORPAY_API;
     this.timeoutMs = cfg.timeoutMs ?? 8000;
     this.backoffMs = cfg.backoffMs ?? 250;
     this.keyId = cfg.keyId ?? process.env.RAZORPAY_KEY_ID;
@@ -127,6 +147,7 @@ export class RazorpayPaymentProvider implements PaymentProvider {
   }
 
   get mode(): IntegrationMode {
+    if (this.emulated) return "MOCK";
     return this.keyId?.startsWith("rzp_live_") ? "LIVE" : "SANDBOX";
   }
   get configured(): boolean {
@@ -138,7 +159,7 @@ export class RazorpayPaymentProvider implements PaymentProvider {
     return { Authorization: basicAuth(this.keyId, this.keySecret), "Content-Type": "application/json" };
   }
   private get<T>(path: string, schema: z.ZodType<T, z.ZodTypeDef, unknown>) {
-    return requestJson<unknown>(this.fetchImpl, `${RAZORPAY_API}${path}`, { headers: this.auth(), attempts: 3, timeoutMs: this.timeoutMs, backoffMs: this.backoffMs }).then((r) => {
+    return requestJson<unknown>(this.fetchImpl, `${this.api}${path}`, { headers: this.auth(), attempts: 3, timeoutMs: this.timeoutMs, backoffMs: this.backoffMs }).then((r) => {
       const p = schema.safeParse(r);
       if (!p.success) throw new IntegrationError("MALFORMED", "Razorpay returned an unexpected response", false);
       return p.data;
@@ -148,10 +169,15 @@ export class RazorpayPaymentProvider implements PaymentProvider {
   /** A Razorpay order for the server-computed amount. Not retried (Razorpay orders have no idempotency key; a retry would only leave an unused order). */
   async createCheckout(input: CheckoutRequest): Promise<CheckoutSession> {
     const body = JSON.stringify({ amount: paise(input.amount), currency: input.currency, receipt: input.paymentId.slice(0, 40), notes: { aharos_payment: input.paymentId, aharos_order: input.orderId } });
-    const raw = await requestJson<unknown>(this.fetchImpl, `${RAZORPAY_API}/orders`, { method: "POST", headers: this.auth(), body, attempts: 1, timeoutMs: this.timeoutMs });
+    const raw = await requestJson<unknown>(this.fetchImpl, `${this.api}/orders`, { method: "POST", headers: this.auth(), body, attempts: 1, timeoutMs: this.timeoutMs });
     const order = rzpOrder.safeParse(raw);
     if (!order.success || order.data.amount !== paise(input.amount)) throw new IntegrationError("MALFORMED", "Razorpay returned an unexpected order", false);
     return { providerRef: order.data.id, checkout: { provider: "razorpay", mode: this.mode, keyId: this.keyId!, orderId: order.data.id, amount: order.data.amount, currency: input.currency } };
+  }
+
+  resumeCheckout(input: { providerRef: string; amount: number; currency: string }): Record<string, string | number> {
+    if (!this.keyId) throw new ProviderUnavailableError("Razorpay is not configured (RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET)");
+    return { provider: "razorpay", mode: this.mode, keyId: this.keyId, orderId: input.providerRef, amount: paise(input.amount), currency: input.currency };
   }
 
   /**
@@ -174,11 +200,15 @@ export class RazorpayPaymentProvider implements PaymentProvider {
       if (pay.order_id !== orderRef) return { verified: false, reason: "Payment does not belong to this checkout" };
       if (notes.aharos_order !== undefined && notes.aharos_order !== input.orderId) return { verified: false, reason: "Payment belongs to another order" };
       if (pay.amount !== paise(input.amount)) return { verified: false, reason: "Amount mismatch" };
+      // created / authorized: not captured YET (auto-capture runs shortly after; the webhook confirms it).
+      if (pay.status === "created" || pay.status === "authorized") return { verified: false, pending: true, reason: `Payment is ${pay.status}` };
       if (pay.status !== "captured") return { verified: false, reason: `Payment is ${pay.status}` };
       return { verified: true, providerRef: orderRef };
     }
     if (!input.providerRef) return { verified: false, reason: "No gateway reference" };
     const order = await this.get(`/orders/${encodeURIComponent(input.providerRef)}`, rzpOrder);
+    // created / attempted: the guest has not paid (or is retrying inside the same checkout) — undecided, not failed.
+    if (order.status === "created" || order.status === "attempted") return { verified: false, pending: true, reason: `Order is ${order.status}` };
     if (order.status !== "paid") return { verified: false, reason: `Order is ${order.status}` };
     if (order.amount_paid !== paise(input.amount)) return { verified: false, reason: "Amount mismatch" };
     return { verified: true, providerRef: order.id };
@@ -222,7 +252,7 @@ export class RazorpayPaymentProvider implements PaymentProvider {
     const list = await this.get(`/orders/${encodeURIComponent(input.providerRef)}/payments`, rzpList(rzpPayment));
     const captured = list.items.find((p) => p.status === "captured" || p.status === "refunded");
     if (!captured) throw new IntegrationError("REJECTED", "No captured payment on this Razorpay order", false);
-    const raw = await requestJson<unknown>(this.fetchImpl, `${RAZORPAY_API}/payments/${encodeURIComponent(captured.id)}/refund`, {
+    const raw = await requestJson<unknown>(this.fetchImpl, `${this.api}/payments/${encodeURIComponent(captured.id)}/refund`, {
       method: "POST", headers: this.auth(), attempts: 1, timeoutMs: this.timeoutMs,
       body: JSON.stringify({ amount: paise(input.amount), notes: input.idempotencyKey ? { aharos_refund_key: input.idempotencyKey } : {} }),
     });

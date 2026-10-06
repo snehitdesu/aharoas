@@ -3,7 +3,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { appOrigin, childEnv, hasDebugSwitch, isAllowedRendererRequest, isAppUrl, parseReauthReply, restoreAuthorizationFrom, validatePrinterName, validateSetupInput } from "../../desktop/main/policy";
+import { appOrigin, childEnv, hasDebugSwitch, isAllowedRendererRequest, isAppUrl, parseReauthReply, restoreAuthorizationFrom, splitStarterChoice, validatePrinterName, validateSetupInput } from "../../desktop/main/policy";
 import { dataPaths, loadOrCreateConfig, prismaEngineFile, readSecret, type SecretCodec } from "../../desktop/main/config";
 import { sqliteUrl } from "../../desktop/runtime/backup";
 
@@ -53,6 +53,13 @@ describe("validateSetupInput (IPC boundary)", () => {
     if (!v.ok) expect(Object.keys(v.fieldErrors).sort()).toEqual(["input", "organizationName", "outletName", "ownerName"]);
     expect(validateSetupInput(null).ok).toBe(false);
     expect(validateSetupInput([good]).ok).toBe(false);
+  });
+  it("splits the optional starter-menu choice off; only a literal true opts in, the rest is still strictly validated", () => {
+    expect(splitStarterChoice({ ...good, starterMenu: true })).toEqual({ input: good, starterMenu: true });
+    for (const v of ["true", 1, "1", null]) expect(splitStarterChoice({ ...good, starterMenu: v }).starterMenu).toBe(false);
+    expect(splitStarterChoice(good)).toEqual({ input: good, starterMenu: false });
+    expect(validateSetupInput(splitStarterChoice({ ...good, starterMenu: true, isAdmin: true }).input).ok).toBe(false);
+    expect(splitStarterChoice(null)).toEqual({ input: null, starterMenu: false });
   });
   it("validates printer names", () => {
     expect(validatePrinterName(undefined)).toBeNull();

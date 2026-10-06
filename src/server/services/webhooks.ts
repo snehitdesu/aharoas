@@ -26,9 +26,10 @@
  * it up. A FAILED event can be retried (the claim is re-acquired), which is safe
  * for the same reasons.
  *
- * Only development/mock adapters exist for aggregators, and Petpooja/Razorpay
- * are skeletons: nothing here claims a real provider is integrated. Mock
- * adapters are refused in production unless ALLOW_MOCK_PROVIDERS=true.
+ * Aggregators have development/mock adapters only and Petpooja is a skeleton.
+ * Razorpay is a REST adapter (integrations/payment) whose state changes are
+ * always re-verified with Razorpay by verifyPayment. Mock adapters are refused
+ * in production unless ALLOW_MOCK_PROVIDERS=true.
  */
 import type { PrismaClient } from "@prisma/client";
 import { prisma } from "@/server/db/client";
@@ -218,9 +219,18 @@ async function receivePayment(db: PrismaClient, provider: PaymentProvider, args:
     let orderId: string | undefined;
     let note: string | undefined;
     if (event.type === "payment.captured") {
-      if (payment.status === "PENDING") {
-        await verifyPayment(ctx, payment.id, { providerRef: event.providerRef }, db);
+      // FAILED too: a capture after a declined attempt (retry inside the same
+      // checkout) or a late one. verifyPayment asks the gateway, never this body.
+      if (payment.status === "PENDING" || payment.status === "FAILED") {
+        const r = await verifyPayment(ctx, payment.id, { providerRef: event.providerRef }, db);
+        if (r.pending) {
+          // The gateway does not show the capture yet: let it redeliver.
+          await fail(db, key, evKey, "Capture not yet visible at the gateway");
+          return outcome("FAILED", { eventId: event.eventId, paymentId: payment.id, reason: "Capture not yet confirmed" });
+        }
         orderId = payment.orderId;
+        if (r.unapplied) note = "captured, but the order cannot take it: refund required (anomaly raised)";
+        else if (r.payment.status !== "SUCCESS") note = `ignored: gateway did not confirm the capture (${r.payment.status})`;
       } else note = `already ${payment.status}`;
     } else if (payment.status === "PENDING") {
       // Compare-and-set: `payment` was read outside this transaction, and a

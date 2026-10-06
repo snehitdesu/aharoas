@@ -122,6 +122,15 @@ export function validateProductionEnv(env: NodeJS.ProcessEnv = process.env): voi
     }
   }
 
+  // --- Razorpay: a configured gateway must be complete, or guests cannot pay / webhooks are refused ---
+  if (env.PAYMENT_PROVIDER?.trim().toLowerCase() === "razorpay") {
+    if (!isSet(env.RAZORPAY_KEY_ID) || !/^rzp_(test|live)_[A-Za-z0-9]+$/.test(env.RAZORPAY_KEY_ID.trim())) problems.push("RAZORPAY_KEY_ID must be a Razorpay key id (rzp_test_… or rzp_live_…) when PAYMENT_PROVIDER=razorpay");
+    if (!isSet(env.RAZORPAY_KEY_SECRET)) problems.push("RAZORPAY_KEY_SECRET is required when PAYMENT_PROVIDER=razorpay");
+    if (!isSet(env.RAZORPAY_WEBHOOK_SECRET)) problems.push("RAZORPAY_WEBHOOK_SECRET is required when PAYMENT_PROVIDER=razorpay (payment webhooks are verified with it)");
+  }
+  // The Razorpay emulator override exists for automated tests only.
+  if (isSet(env.RAZORPAY_API_BASE) && !mocksAllowed) problems.push("RAZORPAY_API_BASE (test emulator) must not be set in production");
+
   // --- The demo seed wipes data and creates public-password accounts ---
   if (env.ALLOW_DEMO_SEED === "true") problems.push("ALLOW_DEMO_SEED must not be 'true' in production");
 
@@ -132,7 +141,7 @@ export function validateProductionEnv(env: NodeJS.ProcessEnv = process.env): voi
   if (isSet(env.METRICS_TOKEN) && env.METRICS_TOKEN.length < 24) problems.push("METRICS_TOKEN must be at least 24 characters when set");
 
   // --- URLs ---
-  for (const name of ["PUBLIC_BASE_URL", "ALERT_WEBHOOK_URL"] as const) {
+  for (const name of ["PUBLIC_BASE_URL", "NEXT_PUBLIC_SITE_URL", "ALERT_WEBHOOK_URL"] as const) {
     const v = env[name];
     if (isSet(v)) {
       const p = httpsUrlProblem(name, v);
@@ -175,12 +184,16 @@ export function productionEnvWarnings(env: NodeJS.ProcessEnv = process.env): str
       if (isSet(v) && DEV_SECRET_PLACEHOLDERS.includes(v.trim().toLowerCase())) w.push(`${name} uses a development placeholder value`);
     }
   }
+  if (env.PAYMENT_PROVIDER?.trim().toLowerCase() === "razorpay" && env.RAZORPAY_KEY_ID?.trim().startsWith("rzp_test_")) w.push("RAZORPAY_KEY_ID is a TEST key: online payments are Razorpay test-mode payments, no real money is collected (staging only)");
+  if (isSet(env.RAZORPAY_API_BASE)) w.push("RAZORPAY_API_BASE is set: Razorpay calls go to a test emulator, not to Razorpay");
   const db = env.DATABASE_URL ?? "";
   if (db.startsWith("file:") && env.AHAROS_DESKTOP !== "1") w.push("DATABASE_URL is SQLite: the server deployment target is PostgreSQL (docs/production-infrastructure.md)");
   if (env.AHAROS_DESKTOP !== "1") {
     if (!isSet(env.EXPORT_DIR)) w.push("EXPORT_DIR is unset: background exports are written to the OS temp directory and lost on restart/cleanup");
     if (!isSet(env.METRICS_TOKEN)) w.push("METRICS_TOKEN is unset: /api/health/metrics is disabled");
     if (!isSet(env.ALERT_WEBHOOK_URL)) w.push("ALERT_WEBHOOK_URL is unset: alerts are written to the log only");
+    if (!isSet(env.PUBLIC_BASE_URL)) w.push("PUBLIC_BASE_URL is unset: table QR codes use the address the Tables screen is viewed on, which guests' phones may not reach");
+    if (!isSet(env.NEXT_PUBLIC_SITE_URL)) w.push("NEXT_PUBLIC_SITE_URL is unset (it must be set when building the website too): the website's canonical links, sitemap and Open Graph URLs point at http://localhost:3000");
     if (!isSet(env.INTEGRATION_SECRETS_KEY)) w.push("INTEGRATION_SECRETS_KEY is unset: integration secrets are encrypted with a key derived from AUTH_SECRET (rotating AUTH_SECRET then makes them unreadable)");
   }
   return w;

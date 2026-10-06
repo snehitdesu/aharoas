@@ -78,8 +78,49 @@ describe("razorpay adapter", () => {
     let order = { id: "order_A", amount: 50000, amount_paid: 50000, status: "paid" };
     const { p } = provider({ "GET /orders/order_A": () => ({ json: order }) });
     expect(await p.verify({ orderId: "o", amount: 500, providerRef: "order_A" })).toEqual({ verified: true, providerRef: "order_A" });
+    // created / attempted: the guest has not paid yet (or is retrying in the same checkout) — undecided, never "failed".
     order = { ...order, status: "attempted", amount_paid: 0 };
-    expect(await p.verify({ orderId: "o", amount: 500, providerRef: "order_A" })).toMatchObject({ verified: false, reason: "Order is attempted" });
+    expect(await p.verify({ orderId: "o", amount: 500, providerRef: "order_A" })).toMatchObject({ verified: false, pending: true, reason: "Order is attempted" });
+    order = { ...order, status: "created", amount_paid: 0 };
+    expect(await p.verify({ orderId: "o", amount: 500, providerRef: "order_A" })).toMatchObject({ verified: false, pending: true });
+    order = { ...order, status: "paid", amount_paid: 40000 };
+    expect(await p.verify({ orderId: "o", amount: 500, providerRef: "order_A" })).toMatchObject({ verified: false, reason: "Amount mismatch" });
+  });
+
+  it("an authorized (not yet captured) payment is pending; a failed one is not", async () => {
+    let status = "authorized";
+    const { p } = provider({ "GET /payments/pay_X": () => ({ json: { id: "pay_X", amount: 50000, status, order_id: "order_A", notes: {} } }) });
+    const good = { razorpay_payment_id: "pay_X", razorpay_order_id: "order_A", razorpay_signature: sig("order_A", "pay_X") };
+    expect(await p.verify({ orderId: "o", amount: 500, providerRef: "order_A", payload: good })).toMatchObject({ verified: false, pending: true });
+    status = "failed";
+    const failed = await p.verify({ orderId: "o", amount: 500, providerRef: "order_A", payload: good });
+    expect(failed).toMatchObject({ verified: false, reason: "Payment is failed" });
+    expect(failed.pending).toBeUndefined();
+  });
+
+  it("an emulator base is honoured only where mocks are allowed, and is then reported as MOCK, never SANDBOX / LIVE", () => {
+    const prev = { base: process.env.RAZORPAY_API_BASE, env: process.env.NODE_ENV, allow: process.env.ALLOW_MOCK_PROVIDERS };
+    const env = process.env as Record<string, string | undefined>;
+    try {
+      env.RAZORPAY_API_BASE = "http://127.0.0.1:9/v1";
+      expect(new RazorpayPaymentProvider({ keyId: "rzp_live_X", keySecret: "y" }).mode).toBe("MOCK");
+      env.NODE_ENV = "production";
+      delete env.ALLOW_MOCK_PROVIDERS;
+      expect(new RazorpayPaymentProvider({ keyId: "rzp_live_X", keySecret: "y" }).mode).toBe("LIVE"); // the override is ignored
+    } finally {
+      env.RAZORPAY_API_BASE = prev.base;
+      if (prev.base === undefined) delete env.RAZORPAY_API_BASE;
+      env.NODE_ENV = prev.env;
+      if (prev.allow === undefined) delete env.ALLOW_MOCK_PROVIDERS;
+      else env.ALLOW_MOCK_PROVIDERS = prev.allow;
+    }
+  });
+
+  it("resuming a checkout hands the browser public data only", () => {
+    const p = new RazorpayPaymentProvider({ keyId: KEY_ID, keySecret: SECRET });
+    const c = p.resumeCheckout({ providerRef: "order_Z", amount: 462, currency: "INR" });
+    expect(c).toEqual({ provider: "razorpay", mode: "SANDBOX", keyId: KEY_ID, orderId: "order_Z", amount: 46200, currency: "INR" });
+    expect(JSON.stringify(c)).not.toContain(SECRET);
   });
 
   it("retries 5xx / 429 a bounded number of times; 4xx is final; malformed and timeouts are classified", async () => {

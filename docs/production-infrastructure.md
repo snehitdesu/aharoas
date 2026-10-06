@@ -40,7 +40,9 @@ risky-but-legal setting. Messages name the variable only, never its value.
 | `INTEGRATION_SECRETS_KEY` | recommended | ≥ 32 chars when set; unset → derived from `AUTH_SECRET` (warning). |
 | `ALLOW_DEMO_SEED` | no | must not be `true`. |
 | `EXPORT_DIR`, `EXPORT_RUNNER`, `EXPORT_RETENTION_HOURS` | recommended | `EXPORT_DIR` unset → warning (temp dir). |
-| `PUBLIC_BASE_URL` | for provider callbacks | must be https. |
+| `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET` | when `PAYMENT_PROVIDER=razorpay` | all three required; key id must be `rzp_test_…` / `rzp_live_…`; a test key under production → warning (staging only). Guide: `docs/payments-razorpay.md`. |
+| `RAZORPAY_API_BASE` | never in production | test emulator only; refused unless `ALLOW_MOCK_PROVIDERS=true` (the adapter then reports MOCK). |
+| `PUBLIC_BASE_URL` | for provider callbacks and printed table QR codes | must be https. Unset → the Tables screen's QR uses the address it is viewed on and warns (a desktop / localhost address is unreachable from guests' phones). |
 | `LOG_LEVEL` (`debug|info|warn|error`), `LOG_FORMAT` (`json|pretty`), `SLOW_REQUEST_MS` | no | validated. |
 | `METRICS_TOKEN` | recommended | ≥ 24 chars; unset → `/api/health/metrics` returns 404 (warning). |
 | `ALERT_WEBHOOK_URL`, `ALERT_THROTTLE_SECONDS`, `ALERT_5XX_THRESHOLD`, `ALERT_AUTH_FAILURE_THRESHOLD`, `ALERT_WEBHOOK_FAILURE_THRESHOLD` | recommended | https URL; unset → alerts only in the log (warning). |

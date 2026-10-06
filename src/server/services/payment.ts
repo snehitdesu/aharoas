@@ -17,6 +17,7 @@ import { type AccessContext, ValidationError, NotFoundError, ConflictError } fro
 import { assertCan } from "@/server/auth/rbac";
 import { writeAudit } from "@/server/audit/log";
 import { createNotificationTx } from "@/server/services/notifications";
+import { raiseAnomaly } from "@/server/services/anomaly";
 import { log } from "@/server/observability/log";
 import { inc } from "@/server/observability/metrics";
 import { runAfterCommit, isRootClient } from "@/server/services/afterCommit";
@@ -143,7 +144,7 @@ async function createPaymentTx(ctx: AccessContext, orderId: string, data: z.infe
  * settled.
  */
 export async function verifyPayment(ctx: AccessContext, paymentId: string, opts: { providerRef?: string; payload?: unknown } = {}, db: Client = prisma) {
-  let result: Awaited<ReturnType<typeof verifyPaymentTx>>;
+  let result: VerifyPaymentResult;
   try {
     result = await serialByOutlet(db, paymentId, () => verifyPaymentTx(ctx, paymentId, opts, db));
   } catch (e) {
@@ -154,7 +155,10 @@ export async function verifyPayment(ctx: AccessContext, paymentId: string, opts:
     }
     throw e;
   }
-  if (result.payment.status === "FAILED") {
+  if (result.unapplied) {
+    inc("restora_payment_failures_total", { reason: "unapplied_capture" });
+    log.error("gateway captured a payment the order cannot take", { event: "payment_unapplied", paymentId, orderId: result.payment.orderId, provider: result.payment.provider ?? "counter" });
+  } else if (result.payment.status === "FAILED" && !result.pending) {
     inc("restora_payment_failures_total", { reason: "not_verified" });
     log.warn("payment not verified", { event: "payment_failed", paymentId, orderId: result.payment.orderId, provider: result.payment.provider ?? "counter" });
   }
@@ -178,12 +182,33 @@ async function serialByOutlet<T>(db: Client, paymentId: string, fn: () => Promis
   return p ? withKeyedLock(`settle:${p.outletId}`, fn) : fn();
 }
 
-function verifyPaymentTx(ctx: AccessContext, paymentId: string, opts: { providerRef?: string; payload?: unknown }, db: Client) {
+export type VerifyPaymentResult = {
+  payment: Awaited<ReturnType<Tx["payment"]["update"]>>;
+  orderSettled: boolean;
+  /** The gateway has not decided yet: the payment stays PENDING. */
+  pending?: boolean;
+  /** The gateway captured money the order can no longer take (raised as an anomaly; refund it). */
+  unapplied?: boolean;
+};
+
+function verifyPaymentTx(ctx: AccessContext, paymentId: string, opts: { providerRef?: string; payload?: unknown }, db: Client): Promise<VerifyPaymentResult> {
   return runInTx(db, async (tx) => {
     const payment = await tx.payment.findUnique({ where: { id: paymentId }, include: { order: true } });
     if (!payment || payment.organizationId !== ctx.organizationId) throw new NotFoundError("Payment not found");
     assertCan(ctx, "payment.take", payment.outletId);
-    if (payment.status !== "PENDING") return { payment, orderSettled: false };
+
+    // Gateway payments are verified with the gateway. Counter payments (cash,
+    // card terminal, UPI QR at the till — no gateway provider on the payment)
+    // are attested by the staff member holding payment.take at this outlet.
+    const gateway = payment.provider && GATEWAY_PROVIDERS.has(payment.provider) ? getPaymentProvider(payment.provider) : null;
+    // A FAILED gateway payment can still turn out captured: the guest retried
+    // inside the same checkout after a declined attempt, or the capture arrived
+    // late. Only the gateway can say so — it is asked again, never the client.
+    const recovering = payment.status === "FAILED" && gateway !== null;
+    if (payment.status !== "PENDING" && !recovering) return { payment, orderSettled: false };
+    // The reference stored when the checkout was created is authoritative: a
+    // client-supplied one may not redirect verification to another gateway order.
+    if (gateway && payment.providerRef && opts.providerRef && opts.providerRef !== payment.providerRef) throw new ValidationError("Payment reference does not match this payment");
 
     // Successful payments must never exceed the order total. Re-check the
     // balance here, in the transaction that makes the payment SUCCESS (several
@@ -192,15 +217,35 @@ function verifyPaymentTx(ctx: AccessContext, paymentId: string, opts: { provider
     // that row, so one commits and the other is retried (runInTx) against the
     // committed SUCCESS — on PostgreSQL this does not depend on the query plan.
     await tx.order.update({ where: { id: payment.orderId }, data: { updatedAt: new Date() } });
-    await assertPayableTx(tx, payment.order, payment.amount);
+    // Counter payments are refused outright when the order cannot take them. A
+    // gateway payment is still checked with the gateway first: money it already
+    // captured must be surfaced for a refund, not silently refused (a webhook
+    // that keeps failing would also be redelivered forever).
+    let notPayable: ValidationError | null = null;
+    try {
+      await assertPayableTx(tx, payment.order, payment.amount);
+    } catch (e) {
+      if (!(e instanceof ValidationError) || !gateway) throw e;
+      notPayable = e;
+    }
 
-    // Gateway payments are verified with the gateway. Counter payments (cash,
-    // card terminal, UPI QR at the till — no gateway provider on the payment)
-    // are attested by the staff member holding payment.take at this outlet.
-    const gateway = payment.provider && GATEWAY_PROVIDERS.has(payment.provider) ? getPaymentProvider(payment.provider) : null;
     const result = gateway
-      ? await gateway.verify({ orderId: payment.orderId, amount: Number(payment.amount), providerRef: opts.providerRef ?? payment.providerRef ?? undefined, payload: opts.payload })
-      : { verified: D(payment.amount).gt(0), providerRef: undefined as string | undefined };
+      ? await gateway.verify({ orderId: payment.orderId, amount: Number(payment.amount), providerRef: payment.providerRef ?? opts.providerRef, payload: opts.payload })
+      : { verified: D(payment.amount).gt(0), providerRef: undefined as string | undefined, pending: false };
+
+    // Undecided at the gateway: nothing changes (no FAILED, no notification).
+    if (result.pending && !result.verified) return { payment, orderSettled: false, pending: true };
+    if (!result.verified) {
+      if (recovering) return { payment, orderSettled: false }; // still not captured: stays FAILED
+      if (notPayable) throw notPayable; // nothing captured: refused without effect, as for counter payments
+    } else if (notPayable) {
+      // Captured at the gateway, but the order is already settled / cancelled
+      // (paid another way meanwhile): the money must go back to the guest.
+      await raiseAnomaly(tx, ctx, { type: "RECONCILIATION_MISMATCH", severity: "HIGH", outletId: payment.outletId, entityType: "Payment", entityId: payment.id, message: `Gateway ${payment.provider} captured ₹${money(payment.amount).toFixed(2)} (${payment.providerRef ?? "no reference"}) for order #${payment.orderId.slice(-6).toUpperCase()}, which cannot take it (${notPayable.message}). Refund the guest at the gateway.` });
+      const closed = payment.status === "PENDING" ? await tx.payment.update({ where: { id: paymentId }, data: { status: "FAILED" } }) : payment;
+      await writeAudit(tx, ctx, { action: "PAYMENT", entityType: "Payment", entityId: paymentId, outletId: payment.outletId, before: { status: payment.status }, after: { status: closed.status, via: payment.provider, unappliedCapture: true } });
+      return { payment: closed, orderSettled: false, unapplied: true };
+    }
 
     const updated = await tx.payment.update({
       where: { id: paymentId },
@@ -210,7 +255,7 @@ function verifyPaymentTx(ctx: AccessContext, paymentId: string, opts: { provider
         verifiedAt: result.verified ? new Date() : null,
       },
     });
-    await writeAudit(tx, ctx, { action: "PAYMENT", entityType: "Payment", entityId: paymentId, outletId: payment.outletId, after: { status: updated.status, via: gateway ? gateway.name : "counter" } });
+    await writeAudit(tx, ctx, { action: "PAYMENT", entityType: "Payment", entityId: paymentId, outletId: payment.outletId, before: recovering ? { status: "FAILED" } : undefined, after: { status: updated.status, via: gateway ? gateway.name : "counter", ...(recovering ? { recovered: "gateway confirmed capture" } : {}) } });
 
     if (!result.verified) {
       // Cashiers see failed attempts in the alert centre (the guest / cashier retries; nothing is charged).

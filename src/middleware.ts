@@ -54,9 +54,10 @@ export function middleware(req: NextRequest) {
 
 export const config = {
   matcher: [
-    "/api/:path*", "/dashboard/:path*", "/pos/:path*", "/kitchen/:path*",
+    // Must cover every PROTECTED_PAGES entry (tests/api/middleware-matcher.test.ts).
+    "/api/:path*", "/dashboard/:path*", "/pos/:path*", "/kitchen/:path*", "/captain/:path*", "/manager/:path*",
     "/reservations/:path*", "/tables/:path*", "/menu/:path*", "/recipes/:path*", "/inventory/:path*", "/procurement/:path*", "/master/:path*", "/customers/:path*",
-    "/staff/:path*", "/finance/:path*", "/reports/:path*", "/exports/:path*", "/anomalies/:path*", "/notifications/:path*", "/settings/:path*", "/audit/:path*",
+    "/staff/:path*", "/finance/:path*", "/analytics/:path*", "/reports/:path*", "/exports/:path*", "/anomalies/:path*", "/notifications/:path*", "/settings/:path*", "/audit/:path*",
     "/account/:path*",
   ],
 };

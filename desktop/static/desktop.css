@@ -131,6 +131,12 @@ input:focus, input:focus-visible { outline: none; border-color: var(--brand-500)
 input[aria-invalid="true"] { border-color: var(--bad-700); }
 input[aria-invalid="true"]:focus { box-shadow: 0 0 0 3px rgb(165 42 31 / 0.2); }
 input.upper { text-transform: uppercase; }
+label.check { display: flex; gap: 10px; align-items: flex-start; margin-top: 4px; cursor: pointer; }
+label.check input { width: 18px; height: 18px; flex: none; margin: 1px 0 0; accent-color: var(--brand-600); box-shadow: none; }
+.hint-inline { display: block; margin-top: 2px; font-size: 12px; font-weight: 400; color: var(--ink-500); }
+label.check { display: flex; gap: 10px; align-items: flex-start; margin-top: 4px; cursor: pointer; }
+label.check input { width: 18px; height: 18px; flex: none; margin: 1px 0 0; accent-color: var(--brand-600); box-shadow: none; }
+.hint-inline { display: block; margin-top: 2px; font-size: 12px; font-weight: 400; color: var(--ink-500); }
 .row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .row > .field-error { grid-column: 1 / -1; order: 99; margin-top: -10px; }
 .hint { margin: -4px 0 4px; font-size: 12px; color: var(--ink-500); }
