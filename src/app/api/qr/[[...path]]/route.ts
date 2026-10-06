@@ -1,6 +1,6 @@
 import { createGuestRouter } from "@/server/api/guestRouter";
 import { RATE_POLICIES } from "@/server/api/rateLimit";
-import { guestMenu, placeGuestOrder, getGuestOrder, startGuestPayment, confirmGuestPayment } from "@/server/services/guestOrdering";
+import { guestMenu, quoteGuestCart, placeGuestOrder, getGuestOrder, startGuestPayment, confirmGuestPayment } from "@/server/services/guestOrdering";
 
 export const runtime = "nodejs";
 
@@ -9,6 +9,8 @@ export const runtime = "nodejs";
 // the x-order-key header (never in the URL, so it stays out of access logs).
 export const { GET, POST } = createGuestRouter([
   { method: "GET", path: "t/:token", handler: ({ params }) => guestMenu(params.token) },
+  // Read-only: the cart priced by the server (availability, variants, add-ons, GST). Creates nothing.
+  { method: "POST", path: "t/:token/quote", ipPolicy: RATE_POLICIES.guestQuotePerIp, handler: ({ params, body }) => quoteGuestCart(params.token, body) },
   {
     method: "POST", path: "t/:token/orders",
     limits: [{ policy: RATE_POLICIES.guestOrderPerTable, key: ({ params }) => params.token }],

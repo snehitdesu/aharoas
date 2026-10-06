@@ -132,27 +132,36 @@ async function scanTable07(owner: Page) {
   return link;
 }
 
-async function orderFromTable(guest: Page, link: string, cart: Array<{ item: string; size?: string; addOn?: string; times?: number }>, expectedTotal: number) {
+async function orderFromTable(guest: Page, link: string, cart: Array<{ item: string; size?: string; addOn?: string; times?: number }>, expectedTotal: number, pay: "CASH" | "ONLINE" = "CASH") {
   await guest.goto(link);
-  await expect(guest.getByLabel("Table T07")).toBeVisible();
+  await expect(guest.getByLabel("Table T07").first()).toBeVisible();
   await expect(guest.getByText("Coders' Cafe").first()).toBeVisible();
   for (const line of cart) {
-    for (let i = 0; i < (line.times ?? 1); i++) {
-      await guest.getByRole("button", { name: `Add ${line.item}` }).click();
-      if (line.size || line.addOn) {
+    const times = line.times ?? 1;
+    if (line.size || line.addOn) {
+      // Sizes / add-ons: the item sheet with the item's real RESTORA variants and modifier group.
+      for (let i = 0; i < times; i++) {
+        await guest.getByRole("button", { name: `Add ${line.item}` }).click();
         const dlg = guest.getByRole("dialog", { name: line.item });
-        if (line.size) await dlg.getByRole("radio", { name: new RegExp(`^${line.size}`) }).click();
-        if (line.addOn) await dlg.getByRole("checkbox", { name: new RegExp(`^${line.addOn}`) }).click();
+        if (line.size) await dlg.getByRole("radio", { name: new RegExp(`^${line.size}`) }).check();
+        if (line.addOn) await dlg.getByRole("checkbox", { name: new RegExp(`^${line.addOn}`) }).check();
         await dlg.getByRole("button", { name: /^Add/ }).click();
       }
+    } else {
+      await guest.getByRole("button", { name: `Add ${line.item}` }).click();
+      for (let i = 1; i < times; i++) await guest.getByRole("button", { name: `Increase ${line.item}` }).click();
     }
   }
-  await guest.getByRole("button", { name: /View cart/ }).click();
-  const cartDlg = guest.getByRole("dialog", { name: "Your order" });
-  await expect(cartDlg.getByLabel("Estimated total")).toContainText(inr(expectedTotal));
-  await cartDlg.getByRole("button", { name: "Place order" }).click();
+  // Sticky cart → cart (priced by the server) → checkout → place the order.
+  await guest.getByRole("link", { name: /^View cart/ }).click();
+  await expect(guest.getByTestId("cart-total")).toHaveText(inr(expectedTotal));
+  await guest.getByRole("link", { name: /^Proceed to checkout/ }).click();
+  await expect(guest.getByText("Table T07").first()).toBeVisible();
+  if (pay === "ONLINE") await guest.getByRole("radio", { name: /Pay online/ }).check();
+  await guest.getByRole("button", { name: /^Place order/ }).click();
   await guest.waitForURL(/\/o\/[^/#]+#k=/);
-  await expect(guest.getByTestId("order-stage")).toHaveText("Waiting for the restaurant to accept");
+  // Cash: the order waits for the restaurant (no KOT yet). Online: the payment window is already opening.
+  if (pay === "CASH") await expect(guest.getByTestId("order-stage")).toHaveText("Waiting for the restaurant to accept");
   return orderIdFrom(guest);
 }
 
@@ -184,23 +193,20 @@ test.describe("investor acceptance — Coders' Cafe, Table 07", () => {
     // Real items and board prices on the customer's phone.
     await g.goto(link);
     await expect(g.getByRole("button", { name: "Add Classic Margherita Pizza" })).toBeVisible();
-    await expect(g.getByRole("listitem").filter({ hasText: "Classic Margherita Pizza" }).first()).toContainText(inr(99));
-    await expect(g.getByRole("listitem").filter({ hasText: "Guntur Chiken 65" }).first()).toContainText(inr(240));
+    await expect(g.getByRole("listitem").filter({ hasText: "Classic Margherita Pizza" }).first()).toContainText("₹99");
+    await expect(g.getByRole("listitem").filter({ hasText: "Guntur Chiken 65" }).first()).toContainText("₹240");
 
+    // ---- checkout with "Pay online": Razorpay opens on the order page for the SERVER's amount.
     // (160 + 60) + 2 × 110 = 440 + 5% = 462
+    plan = { finish: "pay" };
     const orderId = await orderFromTable(g, link, [
       { item: "Classic Margherita Pizza", size: "Medium", addOn: "Make It a Cheese Melt" },
       { item: "Classic Fries", size: "Large", times: 2 },
-    ], 462);
-    let o = await get<OrderDTO>(api, `/api/orders/${orderId}`);
-    expect(o).toMatchObject({ status: "OPEN", channel: "QR", total: "462" });
-    expect(o.items.map((i) => [i.name, Number(i.qty)])).toEqual([["Classic Margherita Pizza (Medium)", 1], ["Classic Fries (Large)", 2]]);
-
-    // ---- pay online with Razorpay
-    plan = { finish: "pay" };
-    await expect(g.getByTestId("pay-at-counter")).toBeVisible();
-    await g.getByRole("button", { name: `Pay online ${inr(462)}` }).click();
+    ], 462, "ONLINE");
     await expect(g.getByText("Payment successful. Thank you!")).toBeVisible();
+    let o = await get<OrderDTO>(api, `/api/orders/${orderId}`);
+    expect(o).toMatchObject({ channel: "QR", total: "462" });
+    expect(o.items.map((i) => [i.name, Number(i.qty)])).toEqual([["Classic Margherita Pizza (Medium)", 1], ["Classic Fries (Large)", 2]]);
     expect(opened.at(-1)).toMatchObject({ key: INVESTOR_RZP.keyId, amount: 46200 });
     expect(emu.orders.get(opened.at(-1)!.orderId)?.amount).toBe(46200);
     await Promise.all(webhooks);
@@ -284,10 +290,9 @@ test.describe("investor acceptance — Coders' Cafe, Table 07", () => {
     const guest = await customerPhone(browser);
     const g = guest.page;
 
-    // 210 + 5% = 220.50
-    const orderId = await orderFromTable(g, link, [{ item: "Butter Garlic Wings (6 Pc)" }], 220.5);
+    // 210 + 5% = 220.50; "Pay online" at checkout opens Razorpay: the bank declines, the guest closes the window.
     plan = { declineFirst: true, finish: "close" };
-    await g.getByRole("button", { name: `Pay online ${inr(220.5)}` }).click();
+    const orderId = await orderFromTable(g, link, [{ item: "Butter Garlic Wings (6 Pc)" }], 220.5, "ONLINE");
     // The bank's reason stays visible after the guest closes the Razorpay window.
     await expect(g.getByRole("alert").filter({ hasText: /declined by the bank.*You can try again\./ })).toBeVisible();
     await Promise.all(webhooks);

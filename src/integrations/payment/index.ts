@@ -96,8 +96,10 @@ function configuredApiBase(): string | undefined {
   return v && mockProvidersAllowed() ? v.replace(/\/+$/, "") : undefined;
 }
 
-const rzpPayment = z.object({ id: z.string(), amount: z.number(), status: z.string(), order_id: z.string().nullish(), notes: z.union([z.record(z.unknown()), z.array(z.unknown())]).nullish(), created_at: z.number().optional() });
-const rzpOrder = z.object({ id: z.string(), amount: z.number(), amount_paid: z.number().default(0), status: z.string() });
+const rzpPayment = z.object({ id: z.string(), amount: z.number(), currency: z.string().optional(), status: z.string(), order_id: z.string().nullish(), notes: z.union([z.record(z.unknown()), z.array(z.unknown())]).nullish(), created_at: z.number().optional() });
+const rzpOrder = z.object({ id: z.string(), amount: z.number(), amount_paid: z.number().default(0), currency: z.string().optional(), status: z.string() });
+/** RESTORA creates every checkout in INR (guestOrdering.startGuestPayment); a payment in anything else is not ours. */
+const CHECKOUT_CURRENCY = "INR";
 const rzpList = <T extends z.ZodTypeAny>(item: T) => z.object({ items: z.array(item), count: z.number().optional() });
 const rzpWebhook = z.object({
   account_id: z.string().optional(),
@@ -200,6 +202,7 @@ export class RazorpayPaymentProvider implements PaymentProvider {
       if (pay.order_id !== orderRef) return { verified: false, reason: "Payment does not belong to this checkout" };
       if (notes.aharos_order !== undefined && notes.aharos_order !== input.orderId) return { verified: false, reason: "Payment belongs to another order" };
       if (pay.amount !== paise(input.amount)) return { verified: false, reason: "Amount mismatch" };
+      if (pay.currency !== undefined && pay.currency !== CHECKOUT_CURRENCY) return { verified: false, reason: "Currency mismatch" };
       // created / authorized: not captured YET (auto-capture runs shortly after; the webhook confirms it).
       if (pay.status === "created" || pay.status === "authorized") return { verified: false, pending: true, reason: `Payment is ${pay.status}` };
       if (pay.status !== "captured") return { verified: false, reason: `Payment is ${pay.status}` };
@@ -211,6 +214,7 @@ export class RazorpayPaymentProvider implements PaymentProvider {
     if (order.status === "created" || order.status === "attempted") return { verified: false, pending: true, reason: `Order is ${order.status}` };
     if (order.status !== "paid") return { verified: false, reason: `Order is ${order.status}` };
     if (order.amount_paid !== paise(input.amount)) return { verified: false, reason: "Amount mismatch" };
+    if (order.currency !== undefined && order.currency !== CHECKOUT_CURRENCY) return { verified: false, reason: "Currency mismatch" };
     return { verified: true, providerRef: order.id };
   }
 

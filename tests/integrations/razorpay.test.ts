@@ -72,6 +72,11 @@ describe("razorpay adapter", () => {
     expect((await p.verify(input(good))).reason).toBe("Payment is authorized");
     pay = payment({ order_id: "order_B" });
     expect((await p.verify(input(good))).reason).toBe("Payment does not belong to this checkout");
+    // Currency: RESTORA charges INR; a payment in anything else is not this payment.
+    pay = payment({ currency: "USD" });
+    expect((await p.verify(input(good))).reason).toBe("Currency mismatch");
+    pay = payment({ currency: "INR" });
+    expect(await p.verify(input(good))).toEqual({ verified: true, providerRef: "order_A" });
   });
 
   it("without a checkout response (webhook path) the order must be paid in full", async () => {
@@ -85,6 +90,8 @@ describe("razorpay adapter", () => {
     expect(await p.verify({ orderId: "o", amount: 500, providerRef: "order_A" })).toMatchObject({ verified: false, pending: true });
     order = { ...order, status: "paid", amount_paid: 40000 };
     expect(await p.verify({ orderId: "o", amount: 500, providerRef: "order_A" })).toMatchObject({ verified: false, reason: "Amount mismatch" });
+    order = { ...order, amount_paid: 50000, currency: "USD" } as typeof order;
+    expect(await p.verify({ orderId: "o", amount: 500, providerRef: "order_A" })).toMatchObject({ verified: false, reason: "Currency mismatch" });
   });
 
   it("an authorized (not yet captured) payment is pending; a failed one is not", async () => {

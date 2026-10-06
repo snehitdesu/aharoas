@@ -29,8 +29,12 @@ import { type AccessContext, NotFoundError, ValidationError } from "@/server/db/
 import { DEV_AUTH_SECRET_PLACEHOLDER } from "@/server/config/env";
 import { writeAudit } from "@/server/audit/log";
 import { createNotificationTx } from "@/server/services/notifications";
-import { listMenu } from "@/server/services/menu";
-import { placeOrder } from "@/server/services/orders";
+import { listMenu, priceMenuSelection } from "@/server/services/menu";
+import { calculateOrderTotals, placeOrder } from "@/server/services/orders";
+import { upsertCustomerByPhone } from "@/server/services/crm";
+import type { Tx } from "@/server/services/_workflow";
+import { formatClock, formatHours, hasHours, isOpenAt } from "@/domain/openingHours";
+import { guestTracker, type GuestTracker } from "@/domain/orderProgress";
 import { createPayment, verifyPayment } from "@/server/services/payment";
 import { buildBill, billOrderInclude, loadBillVenue, orderRef, type Bill } from "@/server/services/bill";
 import { getOrderInvoices } from "@/server/services/invoicing";
@@ -70,7 +74,7 @@ const BAD_QR = "This table QR code is not valid. Please ask the staff for help."
 export type GuestTable = {
   ctx: AccessContext;
   table: { id: string; code: string };
-  outlet: { id: string; organizationId: string; name: string; address: string | null; phone: string | null; currency: string; timezone: string };
+  outlet: { id: string; organizationId: string; name: string; address: string | null; phone: string | null; currency: string; timezone: string; openTime: string | null; closeTime: string | null };
   restaurantName: string;
 };
 
@@ -80,7 +84,7 @@ export async function resolveTable(token: string, db: PrismaClient = prisma): Pr
   if (!table) throw new NotFoundError(BAD_QR);
   const outlet = await db.outlet.findUnique({
     where: { id: table.outletId },
-    select: { id: true, organizationId: true, name: true, address: true, phone: true, currency: true, timezone: true, active: true, organization: { select: { name: true, legalName: true, active: true } } },
+    select: { id: true, organizationId: true, name: true, address: true, phone: true, currency: true, timezone: true, openTime: true, closeTime: true, active: true, organization: { select: { name: true, legalName: true, active: true } } },
   });
   if (!outlet || !outlet.active || !outlet.organization.active || outlet.organizationId !== table.organizationId) throw new NotFoundError(BAD_QR);
   const { active: _a, organization, ...o } = outlet;
@@ -153,10 +157,108 @@ export async function guestMenu(token: string, db: PrismaClient = prisma) {
       .map((l) => ({ group: { id: l.group.id, name: l.group.name, minSelect: l.group.minSelect, maxSelect: l.group.maxSelect, active: true, options: l.group.options.map((o) => ({ id: o.id, name: o.name, priceDelta: num(o.priceDelta), active: o.active })) } })),
   }));
   return {
-    restaurant: { name: t.restaurantName, outletName: t.outlet.name, address: t.outlet.address, currency: t.outlet.currency },
+    restaurant: {
+      name: t.restaurantName,
+      outletName: t.outlet.name,
+      address: t.outlet.address,
+      phone: t.outlet.phone,
+      currency: t.outlet.currency,
+      // Only what the restaurant has entered in RESTORA (Admin → Outlets); null = not configured.
+      hours: hasHours(t.outlet) ? { open: t.outlet.openTime, close: t.outlet.closeTime, label: formatHours(t.outlet) } : null,
+    },
     table: { code: t.table.code },
+    ordering: orderingStatus(t),
     menu,
     payment: await guestPaymentOptions(),
+  };
+}
+
+// ---------------- ordering availability ----------------
+
+export type OrderingStatus = { open: boolean; message: string | null };
+
+/** Orders are accepted inside the outlet's opening hours; an outlet without hours is always open. */
+export function orderingStatus(t: Pick<GuestTable, "outlet">, now: Date = new Date()): OrderingStatus {
+  if (isOpenAt(t.outlet, now)) return { open: true, message: null };
+  const opens = formatClock(t.outlet.openTime);
+  return { open: false, message: `We're closed right now${opens ? ` — ordering opens at ${opens}` : ""}. You can still browse the menu.` };
+}
+
+// ---------------- server pricing of a cart ----------------
+
+const NOT_ON_MENU = "This item is no longer on the menu";
+
+type GuestLineInput = { menuItemId: string; variantId?: string; modifierOptionIds?: string[]; qty: number };
+export type GuestPricedLine =
+  | { index: number; ok: true; menuItemId: string; name: string; unitPrice: string; modifiers: Array<{ name: string; priceDelta: string }>; modifiersPerUnit: string; taxPct: string; qty: number; lineTotal: string }
+  | { index: number; ok: false; menuItemId: string; reason: string; notFound?: true };
+
+/**
+ * Price every line exactly as order placement will (menu.priceMenuSelection:
+ * outlet price override, variant, modifier rules, sold-out / not offered) —
+ * read-only. A line that cannot be ordered carries the reason instead of a price.
+ */
+async function priceGuestLines(db: PrismaClient, t: GuestTable, items: GuestLineInput[]): Promise<GuestPricedLine[]> {
+  const out: GuestPricedLine[] = [];
+  for (const [index, it] of items.entries()) {
+    try {
+      // Reads only (menu item, variants, groups, outlet override): no transaction needed.
+      const p = await priceMenuSelection(db as unknown as Tx, t.ctx, { menuItemId: it.menuItemId, variantId: it.variantId, modifierOptionIds: it.modifierOptionIds?.length ? it.modifierOptionIds : undefined, outletId: t.outlet.id });
+      const modsPerUnit = p.modifiers.reduce((a, m) => a.plus(m.priceDelta), D(0));
+      const line = calculateOrderTotals([{ qty: it.qty, unitPrice: p.unitPrice, modifiersPerUnit: modsPerUnit, taxPct: p.taxPct }]);
+      out.push({
+        index,
+        ok: true,
+        menuItemId: p.menuItemId,
+        name: p.name,
+        unitPrice: money(p.unitPrice).toFixed(2),
+        modifiers: p.modifiers.map((m) => ({ name: m.name, priceDelta: money(m.priceDelta).toFixed(2) })),
+        modifiersPerUnit: money(modsPerUnit).toFixed(2),
+        taxPct: D(p.taxPct).toString(),
+        qty: it.qty,
+        lineTotal: line.subtotal.toFixed(2),
+      });
+    } catch (e) {
+      if (e instanceof NotFoundError) out.push({ index, ok: false, menuItemId: it.menuItemId, reason: NOT_ON_MENU, notFound: true });
+      else if (e instanceof ValidationError) out.push({ index, ok: false, menuItemId: it.menuItemId, reason: e.message });
+      else throw e;
+    }
+  }
+  return out;
+}
+
+const quoteSchema = z.object({ items: z.array(z.lazy(() => guestItem)).min(1, "Your cart is empty").max(30) }).strict();
+
+export type GuestQuote = {
+  lines: GuestPricedLine[];
+  /** Totals of the lines that can be ordered, by the same function that prices orders and invoices. */
+  subtotal: string;
+  tax: string;
+  taxes: Array<{ ratePct: string; amount: string }>;
+  total: string;
+  allAvailable: boolean;
+  ordering: OrderingStatus;
+};
+
+/**
+ * The cart as the server would price it right now. Nothing is created; the
+ * order total is still computed again when the order is placed.
+ */
+export async function quoteGuestCart(token: string, input: unknown, db: PrismaClient = prisma): Promise<GuestQuote> {
+  const data = quoteSchema.parse(input);
+  const t = await resolveTable(token, db);
+  const lines = await priceGuestLines(db, t, data.items);
+  const okLines = lines.filter((l): l is Extract<GuestPricedLine, { ok: true }> => l.ok);
+  const totals = calculateOrderTotals(okLines.map((l) => ({ qty: l.qty, unitPrice: l.unitPrice, modifiersPerUnit: l.modifiersPerUnit, taxPct: l.taxPct })));
+  return {
+    // `notFound` is internal (placement keeps answering 404 for a dish that is not this restaurant's).
+    lines: lines.map((l) => (l.ok ? l : { index: l.index, ok: false as const, menuItemId: l.menuItemId, reason: l.reason })),
+    subtotal: totals.subtotal.toFixed(2),
+    tax: totals.tax.toFixed(2),
+    taxes: totals.byRate.map((r) => ({ ratePct: r.ratePct.toString(), amount: r.tax.toFixed(2) })),
+    total: totals.total.toFixed(2),
+    allAvailable: okLines.length === lines.length,
+    ordering: orderingStatus(t),
   };
 }
 
@@ -172,7 +274,37 @@ const guestItem = z
   })
   .strict(); // a client price, tax or total is refused, not ignored
 
-const guestOrderSchema = z.object({ items: z.array(guestItem).min(1, "Your cart is empty").max(30), notes: z.string().trim().max(300).optional() }).strict();
+/** Indian mobile numbers as typed ("98765 43210", "+91-98765-43210") → "9876543210"; other countries keep their digits (+ prefix). */
+export function normalizeGuestPhone(raw: string): string {
+  const compact = raw.replace(/[\s().-]/g, "");
+  const india = /^(?:\+?91|0)?([6-9]\d{9})$/.exec(compact);
+  return india ? india[1] : compact;
+}
+
+const guestCustomer = z
+  .object({
+    /** Shown to the staff with the order (and kept on the CRM record when a phone is given). */
+    name: z.string().trim().max(60, "Name is too long").optional(),
+    /** Optional. With a phone the order is linked to the restaurant's customer record (find-or-create; an existing record is never overwritten). */
+    phone: z
+      .string()
+      .trim()
+      .max(20)
+      .transform(normalizeGuestPhone)
+      .refine((p) => /^\+?\d{10,15}$/.test(p), "Enter a valid mobile number")
+      .optional(),
+  })
+  .strict();
+
+const guestOrderSchema = z
+  .object({
+    items: z.array(guestItem).min(1, "Your cart is empty").max(30),
+    notes: z.string().trim().max(300).optional(),
+    customer: guestCustomer.optional(),
+    /** How the guest says they will pay. Informational for the staff; payment itself is verified separately. */
+    paymentMethod: z.enum(["CASH", "ONLINE"]).optional(),
+  })
+  .strict();
 const idemKey = z.string().trim().min(8).max(64).regex(/^[\w.:-]+$/, "Invalid idempotency key");
 
 /** Unaccepted guest orders a table may have waiting at once (a QR is a public link). */
@@ -190,12 +322,27 @@ export async function placeGuestOrder(token: string, input: unknown, idempotency
   if (!existing) {
     const waiting = await db.order.count({ where: { organizationId: t.ctx.organizationId, tableId: t.table.id, source: "QR", status: "OPEN" } });
     if (waiting >= MAX_WAITING_GUEST_ORDERS) throw new ValidationError("Several orders from this table are waiting for the restaurant to accept them. Please wait, or ask the staff.");
+    const ordering = orderingStatus(t);
+    if (!ordering.open) throw new ValidationError(ordering.message!);
+    // Every line is checked (and priced) before anything is created, so a sold-out
+    // item never leaves a half-made order or a stray customer record behind.
+    const bad = (await priceGuestLines(db, t, data.items)).find((l) => !l.ok);
+    if (bad && !bad.ok) {
+      // Unknown / another restaurant's dish: the same 404 as before (no oracle); unavailable: 422 with the reason.
+      if (bad.notFound) throw new NotFoundError("Menu item not found");
+      throw new ValidationError(`Item ${bad.index + 1}: ${bad.reason}. Please update your cart.`);
+    }
   }
+  const guestName = data.customer?.name || undefined;
+  // A phone links the order to the restaurant's CRM (find-or-create; a known customer's
+  // name is never changed). The guest's response never reveals whether the number was known.
+  const customerId = data.customer?.phone ? (await upsertCustomerByPhone(t.ctx, { name: guestName ?? "Guest", phone: data.customer.phone }, db)).id : undefined;
   const order = await placeOrder(t.ctx, {
     outletId: t.outlet.id,
     channel: "QR",
     source: "QR",
     tableId: t.table.id,
+    customerId,
     covers: 1,
     notes: data.notes || undefined,
     idempotencyKey: scopedKey,
@@ -203,10 +350,11 @@ export async function placeGuestOrder(token: string, input: unknown, idempotency
     submit: false,
   }, db);
   if (!order.replayed) {
+    const pays = data.paymentMethod === "ONLINE" ? "paying online" : data.paymentMethod === "CASH" ? "pays at the counter" : null;
     await db.$transaction(async (tx) => {
-      await writeAudit(tx, t.ctx, { action: "CREATE", entityType: "Order", entityId: order.id, outletId: t.outlet.id, after: { via: "guest-qr", table: t.table.code, total: money(order.total).toString() }, ip: meta.ip, userAgent: meta.userAgent?.slice(0, 200) });
+      await writeAudit(tx, t.ctx, { action: "CREATE", entityType: "Order", entityId: order.id, outletId: t.outlet.id, after: { via: "guest-qr", table: t.table.code, total: money(order.total).toString(), ...(guestName ? { guestName } : {}), ...(data.paymentMethod ? { paymentMethod: data.paymentMethod } : {}) }, ip: meta.ip, userAgent: meta.userAgent?.slice(0, 200) });
       // Staff (POS / captain alert centre) learn about the waiting order in-app.
-      await createNotificationTx(tx, t.ctx, { outletId: t.outlet.id, type: "NEW_ORDER", title: `New QR order · table ${t.table.code}`, body: `${orderRef(order.id)} · ₹${money(order.total).toFixed(2)} — waiting to be accepted` });
+      await createNotificationTx(tx, t.ctx, { outletId: t.outlet.id, type: "NEW_ORDER", title: `New QR order · table ${t.table.code}`, body: [`${orderRef(order.id)} · ₹${money(order.total).toFixed(2)} — waiting to be accepted`, guestName, pays].filter(Boolean).join(" · ") });
     });
   }
   return { orderId: order.id, ref: orderRef(order.id), accessKey: guestOrderKey(order.id), replayed: Boolean(order.replayed) };
@@ -227,6 +375,8 @@ export type GuestOrderView = {
   status: string;
   fulfilment: Bill["fulfilment"];
   fulfilmentLabel: string;
+  /** Customer tracker (received → kitchen accepted → preparing → ready → served), from the KOTs. */
+  tracker: GuestTracker;
   bill: Bill;
   canPay: boolean;
   payment: GuestPaymentOptions;
@@ -243,6 +393,7 @@ async function viewOf(order: Awaited<ReturnType<typeof loadGuestOrder>>, db: Pri
     status: order.status,
     fulfilment: bill.fulfilment,
     fulfilmentLabel: FULFILMENT_LABEL[bill.fulfilment],
+    tracker: guestTracker(order),
     bill,
     canPay: payment.online && !["PAID", "CANCELLED", "REFUNDED"].includes(order.status) && D(bill.balanceDue).gt(0),
     payment,

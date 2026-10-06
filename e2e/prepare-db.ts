@@ -62,6 +62,10 @@ async function main() {
   await menu.attachModifierGroup(ctx, pizza.id, toppings.id);
 
   await crm.createCustomer(ctx, { name: "E2E Guest", phone: "9999900001" });
+  // Guest (QR) ordering is refused outside an outlet's opening hours; the suite runs at any
+  // hour, so the demo outlets' hours are cleared here (e2e/storefront.spec.ts sets them to
+  // test the closed state).
+  await prisma.outlet.updateMany({ where: { organizationId: org.id }, data: { openTime: null, closeTime: null } });
   await prisma.$disconnect();
   console.log(`[e2e] database ready (${isPostgres ? "PostgreSQL" : E2E_DB_PATH})`);
 }

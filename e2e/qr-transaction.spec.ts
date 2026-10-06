@@ -36,6 +36,17 @@ async function addDish(page: Page, name: string) {
   await page.getByRole("button", { name: `Add ${name}` }).click();
 }
 
+/** Storefront: sticky cart → cart page (server-priced) → checkout → place the order (cash unless told otherwise). */
+async function checkout(page: Page, opts: { total?: string; online?: boolean } = {}) {
+  await page.getByRole("link", { name: /^View cart/ }).click();
+  await page.waitForURL(/\/cart$/);
+  if (opts.total) await expect(page.getByTestId("cart-total")).toHaveText(opts.total);
+  await page.getByRole("link", { name: /^Proceed to checkout/ }).click();
+  await page.waitForURL(/\/checkout$/);
+  if (opts.online) await page.getByRole("radio", { name: /Pay online/ }).check();
+  await page.getByRole("button", { name: /^Place order/ }).click();
+}
+
 test.describe("QR guest transaction", () => {
   test("QR-001 guest order -> POS accept -> KOT/KDS -> guest pays online -> receipt -> stock -> sales", async ({ page, browser }) => {
     const outlet = await outletByCode(page.request, CENTRAL);
@@ -52,16 +63,14 @@ test.describe("QR guest transaction", () => {
     await expect(g.getByLabel("Table F5")).toBeVisible();
     await expect(g.getByRole("heading", { level: 1 })).toBeVisible();
     await addDish(g, "Paneer Tikka");
-    await addDish(g, "Paneer Tikka");
+    await g.getByRole("button", { name: "Increase Paneer Tikka" }).click(); // the row turns into a stepper
     await addDish(g, "Chicken Biryani");
     const mod = g.getByRole("dialog", { name: "Chicken Biryani" });
-    await mod.getByRole("radio", { name: /Spicy/ }).click();
+    await mod.getByRole("radio", { name: /Spicy/ }).check();
     await mod.getByRole("button", { name: /^Add/ }).click();
-    await g.getByRole("button", { name: /3 items .* View cart/ }).click();
-    const cart = g.getByRole("dialog", { name: "Your order" });
-    await expect(cart.getByLabel("Estimated total")).toContainText(money(924)); // (2×280 + 320) × 1.05
+    await expect(g.getByRole("link", { name: /^View cart: 3 items/ })).toBeVisible();
     const placed = g.waitForResponse((r) => r.request().method() === "POST" && /\/api\/qr\/t\/.+\/orders$/.test(r.url()));
-    await cart.getByRole("button", { name: "Place order" }).click();
+    await checkout(g, { total: money(924) }); // (2×280 + 320) × 1.05, priced by the server
     expect((await placed).status()).toBe(200);
     await g.waitForURL(/\/o\/[^/#]+#k=/);
     const orderId = orderIdFrom(g);
@@ -156,8 +165,7 @@ test.describe("QR guest transaction", () => {
     const g = guest.page;
     await g.goto(`/t/${token}`);
     await addDish(g, "Masala Chai");
-    await g.getByRole("button", { name: /1 item .* View cart/ }).click();
-    await g.getByRole("dialog", { name: "Your order" }).getByRole("button", { name: "Place order" }).click();
+    await checkout(g);
     await g.waitForURL(/\/o\//);
     const orderId = orderIdFrom(g);
     await g.getByRole("button", { name: /^Pay/ }).click();
@@ -188,7 +196,7 @@ test.describe("QR guest transaction", () => {
     const g = guest.page;
 
     await g.goto("/t/not-a-real-table-token");
-    await expect(g.getByRole("heading", { name: "QR code not recognised" })).toBeVisible();
+    await expect(g.getByRole("heading", { name: "This QR code isn't working" })).toBeVisible();
 
     const menu = await apiData<{ menu: Array<{ id: string; name: string }> }>(g.request, `/api/qr/t/${token}`);
     const chai = menu.menu.find((i) => i.name === "Masala Chai")!;
@@ -199,7 +207,9 @@ test.describe("QR guest transaction", () => {
     // The first submission reaches the server but its response is lost.
     await g.goto(`/t/${token}`);
     await addDish(g, "Masala Chai");
-    await g.getByRole("button", { name: /View cart/ }).click();
+    await g.getByRole("link", { name: /^View cart/ }).click();
+    await g.getByRole("link", { name: /^Proceed to checkout/ }).click();
+    await g.waitForURL(/\/checkout$/);
     let dropped = false;
     await g.route("**/api/qr/t/*/orders", async (route) => {
       if (dropped) return route.continue();
@@ -209,9 +219,8 @@ test.describe("QR guest transaction", () => {
     });
     await g.getByRole("button", { name: "Place order" }).click();
     await expect(g.getByRole("alert").filter({ hasText: /Network error/ })).toBeVisible();
-    // The guest refreshes and taps again: the same cart replays the same order.
+    // The guest refreshes the checkout and taps again: the same cart replays the same order.
     await g.reload();
-    await g.getByRole("button", { name: /View cart/ }).click();
     await g.getByRole("button", { name: "Place order" }).click();
     await g.waitForURL(/\/o\//);
     const mine = (await apiData<{ items: Array<{ id: string }> }>(page.request, `/api/orders?outletId=${outlet.id}&tableId=${tableId}&take=50`)).items;

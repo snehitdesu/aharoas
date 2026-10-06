@@ -94,6 +94,8 @@ export const RATE_POLICIES = {
   guestReadPerIp: { name: "guest-read-ip", limit: 600, windowMs: 60_000 },
   guestWritePerIp: { name: "guest-write-ip", limit: 60, windowMs: 60_000 },
   guestOrderPerTable: { name: "guest-order-table", limit: 20, windowMs: 10 * 60_000 },
+  // Cart re-pricing (read-only POST): several guests on one café Wi-Fi share an IP.
+  guestQuotePerIp: { name: "guest-quote-ip", limit: 240, windowMs: 60_000 },
 } satisfies Record<string, RatePolicy>;
 
 export function trustedProxyHops(): number {

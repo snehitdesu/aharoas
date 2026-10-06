@@ -50,6 +50,7 @@ Details: `TESTING.md`.
 | Database | `DATABASE.md`, `docs/postgres.md`, `docs/postgres-rls.md` |
 | Production infrastructure, load results, backup / DR | `docs/production-infrastructure.md` |
 | Operations runbook | `docs/production-runbook.md` |
+| Customer website (table QR ordering) | `docs/customer-web.md` |
 | Security | `docs/security.md` |
 | Compliance readiness (GST etc.) | `docs/compliance-readiness.md` |
 | Release checklist / notes | `docs/release-checklist.md`, `docs/release-notes.md` |

@@ -53,6 +53,19 @@ afterAll(async () => { await prisma.$disconnect(); });
 const ORIGIN = "http://localhost";
 
 describe("guest API", () => {
+  it("quotes a cart over HTTP (read-only, same-origin, its own per-IP limit) without creating an order", async () => {
+    const before = await prisma.order.count({ where: { organizationId: orgId } });
+    const q = await call(Guest, "POST", `t/${token}/quote`, { origin: ORIGIN, body: { items: [{ menuItemId: dish, qty: 2 }] } });
+    expect(q.status).toBe(200);
+    expect(q.headers.get("cache-control")).toBe("no-store");
+    expect(q.json.data).toMatchObject({ subtotal: "200.00", tax: "10.00", total: "210.00", allAvailable: true });
+    expect(await prisma.order.count({ where: { organizationId: orgId } })).toBe(before);
+    expect((await call(Guest, "POST", `t/${token}/quote`, { origin: "https://evil.example", body: { items: [{ menuItemId: dish, qty: 1 }] } })).status).toBe(403);
+    expect((await call(Guest, "POST", `t/${token}/quote`, { origin: ORIGIN, body: { items: [{ menuItemId: dish, qty: 1, unitPrice: 1 }] } })).status).toBe(422);
+    expect((await call(Guest, "POST", "t/unknown-token-xyz/quote", { origin: ORIGIN, body: { items: [{ menuItemId: dish, qty: 1 }] } })).status).toBe(404);
+    expect(RATE_POLICIES.guestQuotePerIp.limit).toBeGreaterThan(RATE_POLICIES.guestWritePerIp.limit);
+  });
+
   it("serves the menu without a session, never cached; bad tokens are a uniform 404", async () => {
     const menu = await call(Guest, "GET", `t/${token}`);
     expect(menu.status).toBe(200);

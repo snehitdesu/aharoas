@@ -28,6 +28,22 @@ Report: `docs/production-completion-report.md`.
 - **Table QR**: scannable QR (SVG, download) on the Tables screen, encoding `PUBLIC_BASE_URL`; QR ordering can be disabled per table (revoke).
 - **Tests**: Razorpay emulator (`tests/support/razorpayEmulator.ts`); `tests/domain/coders-cafe-*.test.ts`; investor browser E2E `npm run e2e:investor` (owner / manager / chef / customer; Razorpay success, cash, decline + retry).
 
+## 2026-10-06 — customer website (table QR storefront)
+Doc: `docs/customer-web.md`. The guest QR pages (`/t/<token>`, `/o/<orderId>`) became the
+customer website — Coders' Cafe branded, any other restaurant neutral — on the existing
+guest-ordering services (no second order / payment / kitchen engine).
+- **Pages**: home + menu (landing, categories, item sheet with real variants / add-ons, sticky cart),
+  `/t/<token>/cart` (server-priced), `/t/<token>/checkout` (optional name / phone, Cash / Pay online),
+  order page (confirmation, 5-step live tracker from the KOTs, Razorpay, bill), My orders, About / Contact
+  (only facts entered in Admin → Outlets).
+- **Server**: `POST /api/qr/t/<token>/quote` (read-only pricing, unavailable lines, own per-IP limit);
+  placement checks every line before creating anything, opening hours, optional phone → CRM
+  find-or-create (`Order.customerId`), payment choice in the staff notification; `guestTracker`.
+- **Tests**: `tests/domain/guest-storefront.test.ts` (14), quote route test, rewritten `tests/ui/guest.test.tsx` (16),
+  `e2e/storefront.spec.ts` (4: phones 390/393/430, price change + sold out in cart, two guests at one table,
+  double tap / closed hours / disabled QR); QR and investor E2E moved to the cart → checkout flow.
+- No schema change, no migration.
+
 ## Stack
 Next.js 15.5.27 (App Router) · React 19.0.8 · TypeScript (strict) · Prisma 6 · SQLite (dev/test) / PostgreSQL 16 (target, **executed**) ·
 Zod · bcryptjs · Vitest.

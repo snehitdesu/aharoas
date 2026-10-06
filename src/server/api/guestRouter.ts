@@ -17,7 +17,14 @@ import { applyTimingHeaders, logSlowRequest, newRequestId } from "@/server/obser
 
 type Method = "GET" | "POST";
 export type GuestHandlerArgs = { params: Record<string, string>; query: Record<string, string>; body: unknown; req: NextRequest; ip: string };
-export type GuestRoute = { method: Method; path: string; handler: (a: GuestHandlerArgs) => Promise<unknown>; limits?: Array<{ policy: RatePolicy; key: (a: GuestHandlerArgs) => string }> };
+export type GuestRoute = {
+  method: Method;
+  path: string;
+  handler: (a: GuestHandlerArgs) => Promise<unknown>;
+  limits?: Array<{ policy: RatePolicy; key: (a: GuestHandlerArgs) => string }>;
+  /** Per-IP policy for this route instead of the method default (read-only POSTs such as a cart quote). */
+  ipPolicy?: RatePolicy;
+};
 
 const MAX_BODY = 32_000;
 
@@ -50,7 +57,7 @@ export function createGuestRouter(routes: GuestRoute[]) {
       const hit = compiled.map((r) => ({ r, params: match(segs, r.segs) })).find((c) => c.params && c.r.method === method);
       if (!hit) throw new NotFoundError("Unknown endpoint");
       const ip = clientIp(req);
-      await enforceRateLimit(method === "GET" ? RATE_POLICIES.guestReadPerIp : RATE_POLICIES.guestWritePerIp, ip);
+      await enforceRateLimit(hit.r.ipPolicy ?? (method === "GET" ? RATE_POLICIES.guestReadPerIp : RATE_POLICIES.guestWritePerIp), ip);
 
       let body: unknown = {};
       if (method !== "GET") {
